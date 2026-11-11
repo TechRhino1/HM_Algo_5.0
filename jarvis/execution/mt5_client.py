@@ -1145,6 +1145,8 @@ class MT5Client:
                 new_sl = float(sl) if sl is not None else float(pending.sl)
                 new_tp = float(tp) if tp is not None else float(pending.tp)
 
+                orig_type_time = int(getattr(pending, "type_time", getattr(mt5, "ORDER_TIME_GTC", 0)) or 0)
+                orig_exp = int(getattr(pending, "time_expiration", 0) or 0)
                 request = {
                     "action": getattr(mt5, "TRADE_ACTION_MODIFY", 7),
                     "order": int(ticket),
@@ -1154,9 +1156,11 @@ class MT5Client:
                     "price": round(new_price, digits),
                     "sl": round(new_sl, digits) if new_sl > 0 else 0.0,
                     "tp": round(new_tp, digits) if new_tp > 0 else 0.0,
-                    "type_time": getattr(mt5, "ORDER_TIME_GTC", 0),
+                    "type_time": orig_type_time,
                     "type_filling": getattr(mt5, "ORDER_FILLING_IOC", 1),
                 }
+                if orig_type_time == getattr(mt5, "ORDER_TIME_SPECIFIED", 2) and orig_exp > 0:
+                    request["expiration"] = orig_exp
 
                 result = mt5.order_send(request)
                 # 10030 = unsupported filling, 10031 = no quotes to process.

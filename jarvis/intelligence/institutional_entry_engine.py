@@ -145,34 +145,37 @@ class InstitutionalEntryEngine:
         has_candlestick_trigger = bool(pa_info.get("pattern_detected", False) and pa_info.get("bias") == bias)
 
         # Passive Limit vs Sniper Immediate Entry inside Discount/Premium Zone
-        # RULE: Never market enter on a fakeout before the liquidity sweep completes!
-        # If no sweep has completed yet, order MUST be passive limit at discount pullback / FVG CE.
+        # Apply Ask-spread compensation on BUY_LIMIT (MT5 fills on Ask) and front-run cushion on both sides
+        front_run = min(max(spread_dist * 0.50, pip_size * 1.5), m5_atr * 0.10)
+        rest_min_gap = max(pip_size * 0.5, spread_dist * 0.25)
         if bias == "BUY":
-            # For BUY: discount zone is <= eq_level
+            # For BUY: discount zone is <= eq_level (Bid OHLC -> add spread + front-run for Ask fill)
             passive_target = min(ref_entry, eq_level) if not has_candlestick_trigger else ref_entry
-            dist_to_ref = abs(c_price - passive_target)
-            if sweep_detected and (dist_to_ref <= (0.25 * m5_atr) or has_candlestick_trigger) and (c_price <= eq_level + (0.50 * m5_atr) or has_candlestick_trigger):
+            adj_target = passive_target + spread_dist + front_run
+            dist_to_ref = abs(c_price - adj_target)
+            if sweep_detected and (dist_to_ref <= (0.25 * m5_atr) or has_candlestick_trigger or adj_target >= (c_price - rest_min_gap)) and (c_price <= eq_level + (0.50 * m5_atr) or has_candlestick_trigger):
                 entry_type = "SNIPER_IMMEDIATE"
                 entry_price = round(context.ask, digits)
             elif micro_fvg_ce is not None and abs(c_price - micro_fvg_ce) < abs(c_price - ote_level):
                 entry_type = "MICRO_FVG_CE"
-                entry_price = round(min(passive_target, c_price - spread_dist), digits)
+                entry_price = round(min(adj_target, c_price - rest_min_gap), digits)
             else:
                 entry_type = "OTE_REFINED"
-                entry_price = round(min(passive_target, c_price - spread_dist), digits)
+                entry_price = round(min(adj_target, c_price - rest_min_gap), digits)
         else:
-            # For SELL: premium zone is >= eq_level
+            # For SELL: premium zone is >= eq_level (Bid fills SELL_LIMIT -> front-run proximal edge)
             passive_target = max(ref_entry, eq_level) if not has_candlestick_trigger else ref_entry
-            dist_to_ref = abs(c_price - passive_target)
-            if sweep_detected and (dist_to_ref <= (0.25 * m5_atr) or has_candlestick_trigger) and (c_price >= eq_level - (0.50 * m5_atr) or has_candlestick_trigger):
+            adj_target = passive_target - front_run
+            dist_to_ref = abs(c_price - adj_target)
+            if sweep_detected and (dist_to_ref <= (0.25 * m5_atr) or has_candlestick_trigger or adj_target <= (c_price + spread_dist + rest_min_gap)) and (c_price >= eq_level - (0.50 * m5_atr) or has_candlestick_trigger):
                 entry_type = "SNIPER_IMMEDIATE"
                 entry_price = round(context.bid, digits)
             elif micro_fvg_ce is not None and abs(c_price - micro_fvg_ce) < abs(c_price - ote_level):
                 entry_type = "MICRO_FVG_CE"
-                entry_price = round(max(passive_target, c_price + spread_dist), digits)
+                entry_price = round(max(adj_target, c_price + spread_dist + rest_min_gap), digits)
             else:
                 entry_type = "OTE_REFINED"
-                entry_price = round(max(passive_target, c_price + spread_dist), digits)
+                entry_price = round(max(adj_target, c_price + spread_dist + rest_min_gap), digits)
 
         # 5. Structural SL: Sweep wick extreme +/- (1.0x spread + 0.20x M5 ATR)
         # The floor is applied to the stop DISTANCE, then sl_price is derived from it,
@@ -289,9 +292,12 @@ class InstitutionalEntryEngine:
         if ref_entry is None:
             ref_entry = c_price
 
-        # Proximity to refinement level: Enter passive limit at FVG/Breaker unless already filled into discount/premium
-        dist_to_ref = abs(c_price - ref_entry)
-        is_favorable_fill = (bias == "BUY" and c_price <= ref_entry) or (bias == "SELL" and c_price >= ref_entry)
+        # Proximity to refinement level: Enter passive limit at FVG/Breaker with Ask-spread & front-run symmetry
+        front_run = min(max(spread_dist * 0.50, pip_size * 1.5), h1_atr * 0.10)
+        rest_min_gap = max(pip_size * 0.5, spread_dist * 0.25)
+        adj_ref = (ref_entry + spread_dist + front_run) if bias == "BUY" else (ref_entry - front_run)
+        dist_to_ref = abs(c_price - adj_ref)
+        is_favorable_fill = (bias == "BUY" and c_price <= adj_ref) or (bias == "SELL" and c_price >= adj_ref)
         if dist_to_ref <= (0.15 * h1_atr) and is_favorable_fill:
             if in_kill_zone:
                 entry_type = "KILL_ZONE_SNIPER"
@@ -300,7 +306,10 @@ class InstitutionalEntryEngine:
             entry_price = round(context.ask if bias == "BUY" else context.bid, digits)
         else:
             entry_type = "M15_FVG_CE" if m15_fvg_midpoint is not None else ("BREAKER_RETEST" if breaker_retest is not None else "STRUCTURE_LIMIT")
-            entry_price = round(ref_entry, digits)
+            if bias == "BUY":
+                entry_price = round(min(adj_ref, c_price - rest_min_gap), digits)
+            else:
+                entry_price = round(max(adj_ref, c_price + spread_dist + rest_min_gap), digits)
 
         # 5. Structural SL: Displacement origin swing point +/- (1.0x spread + 0.30x H1 ATR)
         # The floor is applied to the stop DISTANCE, then sl_price is derived from it,
@@ -711,35 +720,53 @@ class InstitutionalEntryEngine:
             return False, 0.50, 0.0, 0.0
 
     def _find_micro_fvg_ce(self, df_m5: Optional[pd.DataFrame], df_m1: Optional[pd.DataFrame], context: MarketContext, bias: str) -> Optional[float]:
-        """Calculates 50% Consequent Encroachment (CE) of recent micro Fair Value Gap."""
+        """Calculates proximal Consequent Encroachment (35%–50% zone fill) of nearest unmitigated FVG."""
+        c_price = float(getattr(context, "current_price", 0.0) or 0.0)
         for df in (df_m1, df_m5):
             if df is not None and len(df) >= 3:
                 highs = df["high"].values.astype(float)
                 lows = df["low"].values.astype(float)
-                for i in range(-1, -min(6, len(df)), -1):
+                start_pos = len(df) - 1
+                end_pos = max(1, len(df) - 12)
+                for pos in range(start_pos, end_pos, -1):
                     if bias == "BUY":
-                        # Bullish FVG: Low of candle i > High of candle i-2
-                        if lows[i] > highs[i - 2]:
-                            ce = (lows[i] + highs[i - 2]) / 2.0
-                            return float(ce)
+                        # Bullish FVG: Low of candle pos > High of candle pos-2
+                        f_top, f_bot = float(lows[pos]), float(highs[pos - 2])
+                        if f_top > f_bot:
+                            after_low = lows[pos + 1:]
+                            mitigated = bool(len(after_low) and (after_low <= f_bot).any())
+                            if not mitigated and (c_price <= 0 or f_bot < c_price):
+                                return float(f_top * 0.65 + f_bot * 0.35)
                     else:
-                        # Bearish FVG: High of candle i < Low of candle i-2
-                        if highs[i] < lows[i - 2]:
-                            ce = (highs[i] + lows[i - 2]) / 2.0
-                            return float(ce)
+                        # Bearish FVG: High of candle pos < Low of candle pos-2
+                        f_top, f_bot = float(lows[pos - 2]), float(highs[pos])
+                        if f_top > f_bot:
+                            after_high = highs[pos + 1:]
+                            mitigated = bool(len(after_high) and (after_high >= f_top).any())
+                            if not mitigated and (c_price <= 0 or f_top > c_price):
+                                return float(f_bot * 0.65 + f_top * 0.35)
 
-        # Fallback to context structure Fair Value Gaps
-        for fvg in getattr(context.structure, "fair_value_gaps", []):
-            if bias == "BUY" and fvg.get("type") == "BULLISH_FVG":
-                top = float(fvg.get("top", 0))
-                bot = float(fvg.get("bottom", 0))
-                if top > bot > 0:
-                    return (top + bot) / 2.0
-            elif bias == "SELL" and fvg.get("type") == "BEARISH_FVG":
-                top = float(fvg.get("top", 0))
-                bot = float(fvg.get("bottom", 0))
-                if top > bot > 0:
-                    return (top + bot) / 2.0
+        # Fallback to nearest unmitigated context structure Fair Value Gap on actionable side
+        target_type = "BULLISH_FVG" if bias == "BUY" else "BEARISH_FVG"
+        candidates = []
+        for fvg in getattr(context.structure, "fair_value_gaps", []) or []:
+            if not isinstance(fvg, dict) or fvg.get("type") != target_type or fvg.get("mitigated", False):
+                continue
+            top = float(fvg.get("top", 0.0) or 0.0)
+            bot = float(fvg.get("bottom", 0.0) or 0.0)
+            if not (top > bot > 0):
+                continue
+            if c_price > 0:
+                if bias == "BUY" and bot >= c_price:
+                    continue
+                if bias == "SELL" and top <= c_price:
+                    continue
+            entry_pt = (top * 0.65 + bot * 0.35) if bias == "BUY" else (bot * 0.65 + top * 0.35)
+            candidates.append((abs(entry_pt - c_price), entry_pt))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            return float(candidates[0][1])
 
         return None
 

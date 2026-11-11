@@ -513,7 +513,7 @@ class JarvisOrchestrator:
                 # 4. Pending Order Staleness Cleanup (Task 2c)
                 if int(now) % 60 < 10:
                     cancelled = self.order_manager.cleanup_stale_pending_orders(
-                        max_age_sec=1800,
+                        max_age_sec=2400,
                         context_map=getattr(self.state_manager, "market_contexts", None),
                     )
                     for order in cancelled or []:
@@ -2148,7 +2148,7 @@ class JarvisOrchestrator:
         """Executes a single multi-style radar sweep across SWING, DAY_TRADING, and SCALP with Universal Opportunity Arbitration."""
         try:
             cancelled = self.order_manager.cleanup_stale_pending_orders(
-                max_age_sec=1800,
+                max_age_sec=2400,
                 context_map=getattr(self.state_manager, "market_contexts", None),
             )
             for order in cancelled or []:

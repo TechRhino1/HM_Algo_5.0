@@ -348,6 +348,12 @@ class DecisionObject:
     as_limit_price: Optional[float] = None
     fallback_rung: str = "RUN"
     expected_value_dollars: float = 0.0
+    trade_style: str = "DAY_TRADING"
+
+    @property
+    def style(self) -> str:
+        """Canonical style alias so downstream consumers see one trade_style."""
+        return self.trade_style
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -361,6 +367,7 @@ class DecisionObject:
             "bias": self.bias,
             "probabilities": self.probabilities,
             "strategy": self.strategy,
+            "trade_style": self.trade_style,
             "ai_score": self.ai_score,
             "entry_price": self.entry_price,
             "stop_loss": self.stop_loss,

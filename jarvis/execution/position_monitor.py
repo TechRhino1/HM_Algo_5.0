@@ -138,6 +138,9 @@ class PositionMonitorEngine:
         # Autonomous dynamic trailing tracking
         self._initial_risk_dist: Dict[int, float] = {}
         self._highest_favorable_price: Dict[int, float] = {}
+        # Pending limit order near-touch micro-nudge tracking (one-shot per ticket)
+        self._pending_best_gap: Dict[int, float] = {}
+        self._pending_nudged: Set[int] = set()
 
         # D19 — the trade's own path, kept as excursions in PRICE UNITS.
         #
@@ -607,19 +610,114 @@ class PositionMonitorEngine:
         except Exception as e:
             logger.debug(f"Margin ladder skipped: {e}")
 
+    def _maybe_nudge_near_touch_pending(
+        self,
+        ticket: Any,
+        sym: str,
+        otype: str,
+        open_price: float,
+        sl_price: float,
+        tp_price: float,
+        ctx: Any,
+    ) -> None:
+        """One-shot micro-nudge when price kisses within near-touch tolerance without filling and bounces."""
+        if ticket is None or not hasattr(self.mt5_client, "modify_pending_order"):
+            return
+        try:
+            t_id = int(ticket)
+        except (TypeError, ValueError):
+            return
+        if t_id in self._pending_nudged or otype not in ("BUY_LIMIT", "SELL_LIMIT"):
+            return
+
+        c_price = getattr(ctx, "current_price", None)
+        bid_px = getattr(ctx, "bid", None)
+        ask_px = getattr(ctx, "ask", None)
+        vol = getattr(ctx, "volatility", None)
+        raw_atr = getattr(vol, "atr", None) if vol else None
+
+        if not isinstance(c_price, (int, float)) or isinstance(c_price, bool) or c_price <= 0:
+            return
+        bid_val = float(bid_px) if (isinstance(bid_px, (int, float)) and not isinstance(bid_px, bool) and bid_px > 0) else float(c_price)
+        ask_val = float(ask_px) if (isinstance(ask_px, (int, float)) and not isinstance(ask_px, bool) and ask_px > 0) else float(c_price)
+        atr = float(raw_atr) if (isinstance(raw_atr, (int, float)) and not isinstance(raw_atr, bool) and raw_atr > 0) else (float(c_price) * 0.005)
+
+        try:
+            from jarvis.data.symbol_registry import resolve as resolve_symbol
+            spec = resolve_symbol(sym)
+            pip_sz = float(spec.pip_size) if getattr(spec, "pip_size", 0) > 0 else 0.0001
+            digits = int(getattr(spec, "digits", 5) or 5)
+            typ_spread_dist = float(getattr(spec, "typical_spread_pips", 1.5) or 1.5) * pip_sz
+        except Exception:
+            pip_sz, digits, typ_spread_dist = 0.0001, 5, 0.00015
+
+        spread_dist = max(0.0, ask_val - bid_val) if ask_val > bid_val else typ_spread_dist
+        near_touch_tol = min(max(pip_sz * 4.0, spread_dist * 1.5), atr * 0.15)
+        bounce_retrace = max(pip_sz * 0.5, spread_dist * 0.25)
+
+        curr_gap = (open_price - bid_val) if otype == "SELL_LIMIT" else (ask_val - open_price)
+        if curr_gap <= 0:
+            return
+
+        prev_best = self._pending_best_gap.get(t_id, curr_gap)
+        best_gap = min(prev_best, curr_gap)
+        self._pending_best_gap[t_id] = best_gap
+
+        # Trigger only if price actually came within near_touch_tol AND started bouncing away slightly
+        if not (0 < best_gap <= near_touch_tol and curr_gap > best_gap + bounce_retrace and curr_gap <= near_touch_tol * 2.5):
+            return
+
+        # Compute nudged limit inside near-touch range while preserving broker validity & RR >= 1.5
+        shift = min(near_touch_tol, best_gap + max(pip_sz * 0.5, spread_dist * 0.25))
+        if sl_price > 0:
+            sl_dist_orig = abs(open_price - sl_price)
+            if sl_dist_orig <= 0 or shift > (sl_dist_orig * 0.15):
+                return
+
+        if otype == "SELL_LIMIT":
+            nudged_px = round(max(ask_val + bounce_retrace, open_price - shift), digits)
+            if nudged_px >= open_price:
+                return
+        else:
+            nudged_px = round(min(bid_val - bounce_retrace, open_price + shift), digits)
+            if nudged_px <= open_price:
+                return
+
+        if sl_price > 0 and tp_price > 0:
+            new_risk = abs(nudged_px - sl_price)
+            new_reward = abs(tp_price - nudged_px)
+            if new_risk <= 0 or (new_reward / new_risk) < 1.50:
+                return
+
+        self._pending_nudged.add(t_id)
+        res = self.mt5_client.modify_pending_order(t_id, price=nudged_px)
+        if res and res.get("status") == "MODIFIED":
+            logger.info(
+                f"🎯 Near-touch limit nudge #{t_id} ({sym} {otype}): {open_price:.{digits}f} -> {nudged_px:.{digits}f} "
+                f"(best_gap={best_gap:.{digits}f} <= tol={near_touch_tol:.{digits}f})"
+            )
+
     def _manage_pending_orders_tick(self):
-        """Scans resting pending orders every 2s for TTL expiration, runaway price, or structural invalidation."""
+        """Scans resting pending orders every 2s for TTL expiration, near-touch capture, runaway price, or invalidation."""
         if not hasattr(self.mt5_client, "get_pending_orders"):
             return
         try:
             pending = self.mt5_client.get_pending_orders()
             if not pending:
+                self._pending_best_gap.clear()
+                self._pending_nudged.clear()
                 return
 
             now = time.time()
             server_now = self.mt5_client.get_broker_time() if hasattr(self.mt5_client, "get_broker_time") else now
+            active_tickets: Set[int] = set()
             for o in pending:
                 ticket = o.get("ticket")
+                if ticket is not None:
+                    try:
+                        active_tickets.add(int(ticket))
+                    except (TypeError, ValueError):
+                        pass
                 setup_time = o.get("time_setup", 0)
                 # Compute age: use local clock if paper mode (abs diff < 1800s), otherwise synchronize to broker server clock
                 if setup_time > 0:
@@ -641,14 +739,14 @@ class PositionMonitorEngine:
                 tp_price = float(o.get("tp", 0.0) or 0.0)
                 comment = str(o.get("comment", "")).upper()
 
-                # Dynamic TTL: Scalp orders expire in 5m (300s), Day Trading in 10m (600s), Swing in 20m (1200s)
-                allowed_age = 600.0
+                # Dynamic TTL: Scalp orders expire in 10m (600s), Day Trading in 20m (1200s), Swing in 40m (2400s)
+                allowed_age = 1200.0
                 if "SCALP" in comment or "SCLP" in comment:
-                    allowed_age = 300.0
-                elif "DAY" in comment:
                     allowed_age = 600.0
-                elif "SWING" in comment or "SWNG" in comment:
+                elif "DAY" in comment:
                     allowed_age = 1200.0
+                elif "SWING" in comment or "SWNG" in comment:
+                    allowed_age = 2400.0
 
                 cancel_reason = None
                 if age > allowed_age:
@@ -688,9 +786,17 @@ class PositionMonitorEngine:
                         elif (getattr(st, "choch", False) and getattr(st, "bias", "") == "BULLISH") or trend_score >= 30.0:
                             cancel_reason = f"Adverse market structure shift (choch_bull, trend_score={trend_score:.1f})"
 
+                    if not cancel_reason:
+                        self._maybe_nudge_near_touch_pending(ticket, sym, otype, open_price, sl_price, tp_price, ctx)
+
                 if cancel_reason:
                     logger.info(f"⏳ Auto-cancelling pending limit order #{ticket} ({sym} {otype}): {cancel_reason}")
                     self.mt5_client.cancel_pending_order(ticket)
+
+            for old_t in list(self._pending_best_gap):
+                if old_t not in active_tickets:
+                    self._pending_best_gap.pop(old_t, None)
+                    self._pending_nudged.discard(old_t)
         except Exception as e:
             logger.debug(f"_manage_pending_orders_tick error: {e}")
 

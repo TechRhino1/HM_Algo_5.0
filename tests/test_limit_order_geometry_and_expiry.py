@@ -119,7 +119,7 @@ class TestLimitOrderGeometryAndExpiry(unittest.TestCase):
         self.assertEqual(call_kwargs["order_type"], "SELL_LIMIT")
         self.assertGreater(call_kwargs["sl_price"], placed_price)
         self.assertLess(call_kwargs["tp_price"], placed_price)
-        self.assertEqual(call_kwargs["expiration_sec"], 1200)
+        self.assertEqual(call_kwargs["expiration_sec"], 2400)
 
     def test_buy_limit_distance_clamped_when_too_far(self):
         """Verify that a BUY_LIMIT placed far below market is clamped to max_limit_dist."""
@@ -162,12 +162,12 @@ class TestLimitOrderGeometryAndExpiry(unittest.TestCase):
         self.mock_mt5.place_pending_order.assert_called_once()
         call_kwargs = self.mock_mt5.place_pending_order.call_args.kwargs
         placed_price = call_kwargs["price"]
-        # Max limit distance for Day is min(0.90 * 0.0030 = 0.0027, 1.1100 * 0.015 = 0.0166) = 0.0027 (27 pips)
-        # Entry should be clamped to ~ 1.1099 - 0.0027 = 1.1072, not 1.1040!
+        # Max limit distance for Day is min(0.85 * 0.0030 = 0.00255, 1.1100 * 0.015 = 0.0166) = 0.00255 (25.5 pips)
+        # Entry should be clamped near 1.1099 - 0.00255 + spread = ~1.10755, not 1.1040!
         self.assertGreater(placed_price, 1.1065, f"Entry {placed_price} should have been clamped near market")
         self.assertLess(placed_price, 1.1099)
         self.assertEqual(call_kwargs["order_type"], "BUY_LIMIT")
-        self.assertEqual(call_kwargs["expiration_sec"], 600)
+        self.assertEqual(call_kwargs["expiration_sec"], 1200)
 
     def test_missed_the_boat_blocked_in_execution_engine(self):
         """Verify that when market has already covered >= 40% towards TP, resting limit is blocked."""
@@ -267,15 +267,15 @@ class TestLimitOrderGeometryAndExpiry(unittest.TestCase):
         with patch("time.time", return_value=1794403300.0):  # Local time with 7200s skew
             monitor._manage_pending_orders_tick()
 
-        # Since age is 500s and allowed_age is 600s for DAY, order should NOT be cancelled yet
+        # Since age is 500s and allowed_age is 1200s for DAY, order should NOT be cancelled yet
         mock_mt5.cancel_pending_order.assert_not_called()
 
-        # Advance server time past 600s
-        mock_mt5.get_broker_time.return_value = 1794410650.0  # 650s after setup
-        with patch("time.time", return_value=1794403450.0):
+        # Advance server time past 1200s
+        mock_mt5.get_broker_time.return_value = 1794411250.0  # 1250s after setup
+        with patch("time.time", return_value=1794404050.0):
             monitor._manage_pending_orders_tick()
 
-        # Now age (650s) > 600s, so it must be cancelled!
+        # Now age (1250s) > 1200s, so it must be cancelled!
         mock_mt5.cancel_pending_order.assert_called_once_with(123456)
 
 

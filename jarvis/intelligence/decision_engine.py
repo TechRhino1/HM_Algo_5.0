@@ -2,7 +2,7 @@
 HM Algo 2.0 — Autonomous Decision Engine & Trade Quality Gate.
 Synthesizes multi-agent confluences, applies Devil's Advocate risk penalties, calculates expected value, and gates execution.
 """
-from typing import Callable, Dict, List, Any, Optional
+from typing import Callable, Dict, List, Any, Optional, Tuple
 from datetime import datetime, timezone
 import logging
 import math
@@ -1347,6 +1347,193 @@ class DecisionEngine:
             return 0.0
         return sum(r.score for r in answered) / len(answered)
 
+    @staticmethod
+    def _select_nearest_unmitigated_zone(
+        zones: List[Dict[str, Any]],
+        zone_keyword: str,
+        cur_price: float,
+        bias: str,
+        is_fvg: bool,
+    ) -> Optional[float]:
+        """Select the nearest unmitigated FVG or OB on the actionable side of market price."""
+        candidates: List[Tuple[float, float]] = []
+        for z in zones or []:
+            if not isinstance(z, dict) or z.get("mitigated", False):
+                continue
+            z_type = str(z.get("type", "")).upper()
+            if zone_keyword not in z_type:
+                continue
+            if is_fvg:
+                top = float(z.get("top", 0.0) or 0.0)
+                bot = float(z.get("bottom", 0.0) or 0.0)
+                if not (top > bot > 0.0):
+                    continue
+                if bias == "SELL" and top <= cur_price:
+                    continue
+                if bias == "BUY" and bot >= cur_price:
+                    continue
+                # Weight 65% toward the proximal edge so bounces at front of gap still fill
+                target = (bot * 0.65 + top * 0.35) if bias == "SELL" else (top * 0.65 + bot * 0.35)
+            else:
+                low_px = float(z.get("low", 0.0) or 0.0)
+                high_px = float(z.get("high", 0.0) or 0.0)
+                if bias == "SELL":
+                    if low_px <= cur_price:
+                        continue
+                    target = low_px
+                else:
+                    if high_px <= 0.0 or high_px >= cur_price:
+                        continue
+                    target = high_px
+            candidates.append((abs(target - cur_price), target))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+
+    def _apply_limit_entry_geometry(
+        self,
+        context: MarketContext,
+        bias: str,
+        style_str: str,
+        cur_mkt_price: float,
+        entry_price: float,
+        sl_price: float,
+        tp_price: float,
+        risk_dist: float,
+        tp_dist: float,
+        atr_val: float,
+        spread_dist: float,
+        pip_size: float,
+        digits: int,
+        tp1_price: Optional[float],
+        tp2_price: Optional[float],
+        tp3_price: Optional[float],
+        first_target_price: Optional[float],
+        use_structure_target: bool = True,
+    ):
+        """Compute spread-compensated, front-run-buffered LIMIT entry and clamp SL/TP uniformly."""
+        sym_name = str(getattr(context, "symbol", "") or "").upper()
+        is_sell = bias == "SELL"
+        ob_list = getattr(context.structure, "order_blocks", []) or []
+        fvg_list = getattr(context.structure, "fair_value_gaps", []) or []
+
+        if use_structure_target:
+            zone_kw = "BEAR" if is_sell else "BULL"
+            fvg_target = self._select_nearest_unmitigated_zone(fvg_list, zone_kw, cur_mkt_price, bias, is_fvg=True)
+            ob_target = self._select_nearest_unmitigated_zone(ob_list, zone_kw, cur_mkt_price, bias, is_fvg=False)
+            eq_px = float(getattr(context.structure, "equilibrium_price", 0.0) or 0.0)
+            eq_valid = (eq_px > cur_mkt_price) if is_sell else (0.0 < eq_px < cur_mkt_price)
+
+            if fvg_target is not None:
+                raw_entry = fvg_target
+            elif ob_target is not None:
+                raw_entry = ob_target
+            elif eq_valid:
+                raw_entry = eq_px
+            else:
+                offset = 0.30 * atr_val
+                raw_entry = (cur_mkt_price + offset) if is_sell else (cur_mkt_price - offset)
+        else:
+            raw_entry = entry_price
+
+        # Front-run buffer eliminates 1-2 pip misses; BUY_LIMIT adds full Ask spread on top of Bid chart level
+        front_run = min(max(spread_dist * 0.75, pip_size * 2.0), atr_val * 0.12)
+        rest_min_gap = max(pip_size * 0.5, spread_dist * 0.25)
+        if is_sell:
+            adj_entry = raw_entry - front_run
+            adj_entry = max(adj_entry, cur_mkt_price + spread_dist + rest_min_gap)
+        else:
+            adj_entry = raw_entry + spread_dist + front_run
+            adj_entry = min(adj_entry, cur_mkt_price - rest_min_gap)
+
+        # Style-calibrated pullback distance clamp
+        if "SCALP" in style_str:
+            max_pullback_dist = min(0.40 * atr_val, cur_mkt_price * 0.004)
+        elif "DAY" in style_str:
+            max_pullback_dist = min(0.80 * atr_val, cur_mkt_price * 0.015)
+        else:
+            max_pullback_dist = min(1.25 * atr_val, cur_mkt_price * 0.030)
+        max_pullback_dist = max(max_pullback_dist, spread_dist * 3.0, float(pip_size) * 8)
+
+        if is_sell:
+            entry_price = round(min(adj_entry, cur_mkt_price + max_pullback_dist), digits)
+        else:
+            entry_price = round(max(adj_entry, cur_mkt_price - max_pullback_dist), digits)
+
+        is_crypto_sym = any(c in sym_name for c in ("BTC", "ETH", "SOL", "CRYPTO"))
+        is_gold_sym = any(g in sym_name for g in ("GOLD", "XAU"))
+        is_index_sym = any(idx in sym_name for idx in ("US30", "NAS", "SPX", "GER", "JP225"))
+        if is_crypto_sym:
+            max_tp_pct = 0.20 if "SWING" in style_str else (0.10 if "DAY" in style_str else 0.05)
+        elif is_gold_sym:
+            max_tp_pct = 0.05 if "SWING" in style_str else (0.025 if "DAY" in style_str else 0.01)
+        elif is_index_sym:
+            max_tp_pct = 0.06 if "SWING" in style_str else (0.03 if "DAY" in style_str else 0.01)
+        else:
+            max_tp_pct = 0.035 if "SWING" in style_str else (0.018 if "DAY" in style_str else 0.008)
+
+        max_tp_dist = round(entry_price * max_tp_pct, digits)
+        tp_dist = min(tp_dist, max_tp_dist)
+        entry_delta = entry_price - getattr(context, "current_price", entry_price)
+
+        if is_sell:
+            min_tp_floor = max(pip_size * 10, round(entry_price * (1.0 - max_tp_pct), digits))
+            sl_price = round(entry_price + risk_dist, digits)
+            tp_price = round(entry_price - tp_dist, digits)
+            if tp_price <= min_tp_floor or tp_price >= entry_price:
+                tp_price = round(max(min_tp_floor, entry_price * 0.80), digits)
+            if tp1_price is not None:
+                tp1_price = round(tp1_price + entry_delta, digits)
+                if tp1_price <= min_tp_floor or tp1_price >= entry_price:
+                    tp1_price = round(max(min_tp_floor, entry_price * 0.90), digits)
+            if tp2_price is not None:
+                tp2_price = round(tp2_price + entry_delta, digits)
+                if tp2_price <= min_tp_floor or tp2_price >= entry_price:
+                    tp2_price = round(max(min_tp_floor, entry_price * 0.80), digits)
+            if tp3_price is not None:
+                tp3_price = round(tp3_price + entry_delta, digits)
+                if tp3_price <= min_tp_floor or tp3_price >= entry_price:
+                    tp3_price = round(max(min_tp_floor, entry_price * 0.70), digits)
+            if first_target_price is not None:
+                first_target_price = round(first_target_price + entry_delta, digits)
+                if first_target_price <= min_tp_floor or first_target_price >= entry_price:
+                    first_target_price = round(max(min_tp_floor, entry_price * 0.90), digits)
+        else:
+            max_tp_ceiling = round(entry_price * (1.0 + max_tp_pct), digits)
+            sl_price = round(entry_price - risk_dist, digits)
+            tp_price = round(entry_price + tp_dist, digits)
+            if tp_price >= max_tp_ceiling or tp_price <= entry_price:
+                tp_price = round(min(max_tp_ceiling, entry_price * 1.20), digits)
+            if tp1_price is not None:
+                tp1_price = round(tp1_price + entry_delta, digits)
+                if tp1_price >= max_tp_ceiling or tp1_price <= entry_price:
+                    tp1_price = round(min(max_tp_ceiling, entry_price * 1.10), digits)
+            if tp2_price is not None:
+                tp2_price = round(tp2_price + entry_delta, digits)
+                if tp2_price >= max_tp_ceiling or tp2_price <= entry_price:
+                    tp2_price = round(min(max_tp_ceiling, entry_price * 1.20), digits)
+            if tp3_price is not None:
+                tp3_price = round(tp3_price + entry_delta, digits)
+                if tp3_price >= max_tp_ceiling or tp3_price <= entry_price:
+                    tp3_price = round(min(max_tp_ceiling, entry_price * 1.30), digits)
+            if first_target_price is not None:
+                first_target_price = round(first_target_price + entry_delta, digits)
+                if first_target_price >= max_tp_ceiling or first_target_price <= entry_price:
+                    first_target_price = round(min(max_tp_ceiling, entry_price * 1.10), digits)
+
+        return (
+            entry_price,
+            sl_price,
+            tp_price,
+            abs(tp_price - entry_price),
+            tp1_price,
+            tp2_price,
+            tp3_price,
+            first_target_price,
+        )
+
     def evaluate(
         self,
         context: MarketContext,
@@ -2169,146 +2356,36 @@ class DecisionEngine:
         is_close_proximity = price_diff <= max(0.25 * atr_val, spread_dist * 3.0)
 
         order_type_decision = "MARKET"
-        if is_chasing_discount_floor or (tentative_bias == "SELL" and is_reversal_or_pullback and not is_close_proximity):
-            # Sell from the top: Route to LIMIT order placed at Premium / Bearish Order Block / FVG CE
+        style_str = str(style or getattr(context, "trade_style", "DAY_TRADING") or "DAY_TRADING").upper()
+        if (
+            is_chasing_discount_floor
+            or is_chasing_premium_roof
+            or (tentative_bias in ("BUY", "SELL") and is_reversal_or_pullback and not is_close_proximity)
+        ):
             order_type_decision = "LIMIT"
-            ob_list = getattr(context.structure, "order_blocks", []) or []
-            bear_obs = [ob for ob in ob_list if isinstance(ob, dict) and "BEAR" in str(ob.get("type", "")).upper()]
-            fvg_list = getattr(context.structure, "fair_value_gaps", []) or []
-            bear_fvgs = [f for f in fvg_list if isinstance(f, dict) and "BEAR" in str(f.get("type", "")).upper()]
-            if bear_fvgs:
-                # Target FVG Consequent Encroachment (50% midpoint)
-                f_top = float(bear_fvgs[0].get("top", cur_mkt_price + 0.35 * atr_val))
-                f_bot = float(bear_fvgs[0].get("bottom", cur_mkt_price + 0.15 * atr_val))
-                entry_price = round((f_top + f_bot) / 2.0, digits)
-            elif bear_obs:
-                entry_price = round(float(bear_obs[0].get("low", cur_mkt_price + 0.35 * atr_val)), digits)
-            elif hasattr(context.structure, "equilibrium_price") and context.structure.equilibrium_price > cur_mkt_price:
-                entry_price = round(context.structure.equilibrium_price, digits)
-            else:
-                entry_price = round(cur_mkt_price + (0.35 * atr_val), digits)
-
-            # Style-calibrated limit distance cap to avoid detached limit entries
-            style_str = str(getattr(context, "trade_style", "SWING") or "SWING").upper()
-            sym_name = str(getattr(context, "symbol", "")).upper()
-            is_crypto_sym = any(c in sym_name for c in ["BTC", "ETH", "SOL", "CRYPTO"])
-            is_gold_sym = any(g in sym_name for g in ["GOLD", "XAU"])
-            is_index_sym = any(idx in sym_name for idx in ["US30", "NAS", "SPX", "GER", "JP225"])
-
-            if "SCALP" in style_str:
-                max_pullback_dist = min(0.50 * atr_val, cur_mkt_price * 0.005)
-            elif "DAY" in style_str:
-                max_pullback_dist = min(0.85 * atr_val, cur_mkt_price * 0.015)
-            else:
-                max_pullback_dist = min(1.25 * atr_val, cur_mkt_price * 0.030)
-            max_pullback_dist = max(max_pullback_dist, spread_dist * 4.0, float(pip_size) * 10)
-            entry_price = min(entry_price, round(cur_mkt_price + max_pullback_dist, digits))
-
-            # Clamping TP distance by asset class
-            if is_crypto_sym:
-                max_tp_pct = 0.20 if "SWING" in style_str else (0.10 if "DAY" in style_str else 0.05)
-            elif is_gold_sym:
-                max_tp_pct = 0.05 if "SWING" in style_str else (0.025 if "DAY" in style_str else 0.01)
-            elif is_index_sym:
-                max_tp_pct = 0.06 if "SWING" in style_str else (0.03 if "DAY" in style_str else 0.01)
-            else: # Forex
-                max_tp_pct = 0.035 if "SWING" in style_str else (0.018 if "DAY" in style_str else 0.008)
-
-            max_tp_dist = round(entry_price * max_tp_pct, digits)
-            tp_dist = min(tp_dist, max_tp_dist)
-            min_tp_floor = max(pip_size * 10, round(entry_price * (1.0 - max_tp_pct), digits))
-
-            entry_delta = entry_price - getattr(context, "current_price", entry_price)
-            sl_price = round(entry_price + risk_dist, digits)
-            tp_price = round(entry_price - tp_dist, digits)
-            if tp_price <= min_tp_floor or tp_price >= entry_price:
-                tp_price = round(max(min_tp_floor, entry_price * 0.80), digits)
-            if tp1_price is not None:
-                tp1_price = round(tp1_price + entry_delta, digits)
-                if tp1_price <= min_tp_floor or tp1_price >= entry_price:
-                    tp1_price = round(max(min_tp_floor, entry_price * 0.90), digits)
-            if tp2_price is not None:
-                tp2_price = round(tp2_price + entry_delta, digits)
-                if tp2_price <= min_tp_floor or tp2_price >= entry_price:
-                    tp2_price = round(max(min_tp_floor, entry_price * 0.80), digits)
-            if tp3_price is not None:
-                tp3_price = round(tp3_price + entry_delta, digits)
-                if tp3_price <= min_tp_floor or tp3_price >= entry_price:
-                    tp3_price = round(max(min_tp_floor, entry_price * 0.70), digits)
-            if first_target_price is not None:
-                first_target_price = round(first_target_price + entry_delta, digits)
-                if first_target_price <= min_tp_floor or first_target_price >= entry_price:
-                    first_target_price = round(max(min_tp_floor, entry_price * 0.90), digits)
-        elif is_chasing_premium_roof or (tentative_bias == "BUY" and is_reversal_or_pullback and not is_close_proximity):
-            # Buy from the bottom: Route to LIMIT order placed at Discount / Bullish Order Block / FVG CE
-            order_type_decision = "LIMIT"
-            ob_list = getattr(context.structure, "order_blocks", []) or []
-            bull_obs = [ob for ob in ob_list if isinstance(ob, dict) and "BULL" in str(ob.get("type", "")).upper()]
-            fvg_list = getattr(context.structure, "fair_value_gaps", []) or []
-            bull_fvgs = [f for f in fvg_list if isinstance(f, dict) and "BULL" in str(f.get("type", "")).upper()]
-            if bull_fvgs:
-                # Target FVG Consequent Encroachment (50% midpoint)
-                f_top = float(bull_fvgs[0].get("top", cur_mkt_price - 0.15 * atr_val))
-                f_bot = float(bull_fvgs[0].get("bottom", cur_mkt_price - 0.35 * atr_val))
-                entry_price = round((f_top + f_bot) / 2.0, digits)
-            elif bull_obs:
-                entry_price = round(float(bull_obs[0].get("high", cur_mkt_price - 0.35 * atr_val)), digits)
-            elif hasattr(context.structure, "equilibrium_price") and 0 < context.structure.equilibrium_price < cur_mkt_price:
-                entry_price = round(context.structure.equilibrium_price, digits)
-            else:
-                entry_price = round(cur_mkt_price - (0.35 * atr_val), digits)
-
-            # Style-calibrated limit distance cap to avoid detached limit entries
-            style_str = str(getattr(context, "trade_style", "SWING") or "SWING").upper()
-            sym_name = str(getattr(context, "symbol", "")).upper()
-            is_crypto_sym = any(c in sym_name for c in ["BTC", "ETH", "SOL", "CRYPTO"])
-            is_gold_sym = any(g in sym_name for g in ["GOLD", "XAU"])
-            is_index_sym = any(idx in sym_name for idx in ["US30", "NAS", "SPX", "GER", "JP225"])
-
-            if "SCALP" in style_str:
-                max_pullback_dist = min(0.50 * atr_val, cur_mkt_price * 0.005)
-            elif "DAY" in style_str:
-                max_pullback_dist = min(0.85 * atr_val, cur_mkt_price * 0.015)
-            else:
-                max_pullback_dist = min(1.25 * atr_val, cur_mkt_price * 0.030)
-            max_pullback_dist = max(max_pullback_dist, spread_dist * 4.0, float(pip_size) * 10)
-            entry_price = max(entry_price, round(cur_mkt_price - max_pullback_dist, digits))
-
-            # Clamping TP distance by asset class
-            if is_crypto_sym:
-                max_tp_pct = 0.20 if "SWING" in style_str else (0.10 if "DAY" in style_str else 0.05)
-            elif is_gold_sym:
-                max_tp_pct = 0.05 if "SWING" in style_str else (0.025 if "DAY" in style_str else 0.01)
-            elif is_index_sym:
-                max_tp_pct = 0.06 if "SWING" in style_str else (0.03 if "DAY" in style_str else 0.01)
-            else: # Forex
-                max_tp_pct = 0.035 if "SWING" in style_str else (0.018 if "DAY" in style_str else 0.008)
-
-            max_tp_dist = round(entry_price * max_tp_pct, digits)
-            tp_dist = min(tp_dist, max_tp_dist)
-            max_tp_ceiling = round(entry_price * (1.0 + max_tp_pct), digits)
-
-            entry_delta = entry_price - getattr(context, "current_price", entry_price)
-            sl_price = round(entry_price - risk_dist, digits)
-            tp_price = round(entry_price + tp_dist, digits)
-            if tp_price >= max_tp_ceiling or tp_price <= entry_price:
-                tp_price = round(min(max_tp_ceiling, entry_price * 1.20), digits)
-            if tp1_price is not None:
-                tp1_price = round(tp1_price + entry_delta, digits)
-                if tp1_price >= max_tp_ceiling or tp1_price <= entry_price:
-                    tp1_price = round(min(max_tp_ceiling, entry_price * 1.10), digits)
-            if tp2_price is not None:
-                tp2_price = round(tp2_price + entry_delta, digits)
-                if tp2_price >= max_tp_ceiling or tp2_price <= entry_price:
-                    tp2_price = round(min(max_tp_ceiling, entry_price * 1.20), digits)
-            if tp3_price is not None:
-                tp3_price = round(tp3_price + entry_delta, digits)
-                if tp3_price >= max_tp_ceiling or tp3_price <= entry_price:
-                    tp3_price = round(min(max_tp_ceiling, entry_price * 1.30), digits)
-            if first_target_price is not None:
-                first_target_price = round(first_target_price + entry_delta, digits)
-                if first_target_price >= max_tp_ceiling or first_target_price <= entry_price:
-                    first_target_price = round(min(max_tp_ceiling, entry_price * 1.10), digits)
+            (
+                entry_price, sl_price, tp_price, tp_dist,
+                tp1_price, tp2_price, tp3_price, first_target_price,
+            ) = self._apply_limit_entry_geometry(
+                context=context,
+                bias=tentative_bias,
+                style_str=style_str,
+                cur_mkt_price=cur_mkt_price,
+                entry_price=entry_price,
+                sl_price=sl_price,
+                tp_price=tp_price,
+                risk_dist=risk_dist,
+                tp_dist=tp_dist,
+                atr_val=atr_val,
+                spread_dist=spread_dist,
+                pip_size=pip_size,
+                digits=digits,
+                tp1_price=tp1_price,
+                tp2_price=tp2_price,
+                tp3_price=tp3_price,
+                first_target_price=first_target_price,
+                use_structure_target=True,
+            )
         elif is_close_proximity:
             # Price is within close proximity (<= 0.25 ATR) of the structural level: execute at market
             order_type_decision = "MARKET"
@@ -2334,13 +2411,36 @@ class DecisionEngine:
                     if tp3_price <= 0:
                         tp3_price = round(max(pip_size * 10, entry_price * 0.25), digits)
                 tp_dist = abs(tp_price - entry_price)
-        elif is_trending_momentum:
-            # Anti-chase discipline: high momentum but price extended away from origin (> 0.25 ATR).
-            # Route to resting LIMIT at the structural retracement level instead of chasing at market extreme.
+        elif is_trending_momentum or price_diff > max(0.40 * atr_val, tolerance_pip * 8):
+            # Anti-chase discipline / passive limit: clamp runaway entry distance & apply Ask/Bid cushion
             order_type_decision = "LIMIT"
-        elif price_diff > max(0.40 * atr_val, tolerance_pip * 8):
-            # Only use LIMIT order when price is resting genuinely far away in a calm market
-            order_type_decision = "LIMIT"
+            if tentative_bias in ("BUY", "SELL"):
+                has_passive_side = (tentative_bias == "BUY" and entry_price < cur_mkt_price) or (
+                    tentative_bias == "SELL" and entry_price > cur_mkt_price
+                )
+                (
+                    entry_price, sl_price, tp_price, tp_dist,
+                    tp1_price, tp2_price, tp3_price, first_target_price,
+                ) = self._apply_limit_entry_geometry(
+                    context=context,
+                    bias=tentative_bias,
+                    style_str=style_str,
+                    cur_mkt_price=cur_mkt_price,
+                    entry_price=entry_price,
+                    sl_price=sl_price,
+                    tp_price=tp_price,
+                    risk_dist=risk_dist,
+                    tp_dist=tp_dist,
+                    atr_val=atr_val,
+                    spread_dist=spread_dist,
+                    pip_size=pip_size,
+                    digits=digits,
+                    tp1_price=tp1_price,
+                    tp2_price=tp2_price,
+                    tp3_price=tp3_price,
+                    first_target_price=first_target_price,
+                    use_structure_target=not has_passive_side,
+                )
 
         # Institutional Rule: When an adversarial threat barrier sits between entry and target:
         # If the barrier allows viable runway (>= min_allowed_rr), tuck TP in front of it to capture profit before reversal.
@@ -2491,6 +2591,7 @@ class DecisionEngine:
             bias=tentative_bias,
             probabilities=probabilities,
             strategy=best_strategy,
+            trade_style=style,
             order_type=order_type_decision,
             entry_price=entry_price,
             stop_loss=sl_price,

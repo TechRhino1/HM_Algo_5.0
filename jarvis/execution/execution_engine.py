@@ -252,7 +252,10 @@ class ExecutionEngine:
 
         mode = getattr(state_mgr, "execution_mode", "demo")
 
-        trade_style = getattr(decision, "trade_style", "") or "DAY"
+        _raw_ts = getattr(decision, "trade_style", None)
+        if not isinstance(_raw_ts, str) or not _raw_ts.strip():
+            _raw_ts = getattr(decision, "style", None)
+        trade_style = _raw_ts if (isinstance(_raw_ts, str) and _raw_ts.strip()) else "DAY_TRADING"
 
         ts_str = str(trade_style).upper()
 
@@ -608,17 +611,23 @@ class ExecutionEngine:
                 atr_val = (float(cur_price) * 0.005) if isinstance(cur_price, (int, float)) and cur_price > 0 else 1.0
 
             max_tolerable_drift = max(0.20 * atr_val, spread_dist * 2.0, float(tick_sz) * 10)
-            style_name = str(getattr(decision, "style", "SWING") or "SWING").upper()
+            style_name = ts_str
             if "SCALP" in style_name:
-                max_limit_dist = min(0.60 * atr_val, cur_price * 0.006)
-                order_ttl_sec = 300
-            elif "DAY" in style_name:
-                max_limit_dist = min(0.90 * atr_val, cur_price * 0.015)
+                max_limit_dist = min(0.50 * atr_val, cur_price * 0.005)
                 order_ttl_sec = 600
-            else:
-                max_limit_dist = min(1.35 * atr_val, cur_price * 0.030)
+            elif "DAY" in style_name:
+                max_limit_dist = min(0.85 * atr_val, cur_price * 0.015)
                 order_ttl_sec = 1200
+            else:
+                max_limit_dist = min(1.30 * atr_val, cur_price * 0.030)
+                order_ttl_sec = 2400
             max_limit_dist = max(max_limit_dist, spread_dist * 4.0, float(tick_sz) * 15)
+
+            pip_sz = float(reg_spec.pip_size if reg_spec else point) or point
+            capture_dist = max(
+                min_pending_dist,
+                min(spread_dist + max(pip_sz * 2.0, 0.06 * atr_val), 0.15 * atr_val),
+            )
 
             if decision.bias == "BUY" and valid_bid:
                 if decision.entry_price >= (bid_price - min_pending_dist):
@@ -635,6 +644,12 @@ class ExecutionEngine:
                         f"Routing seamlessly to instant MARKET order."
                     )
                     is_sane_limit = False
+                elif valid_ask and (ask_price - decision.entry_price) <= capture_dist:
+                    logger.info(
+                        f"⚡ BUY_LIMIT price ({decision.entry_price}) is within micro capture band of live Ask ({ask_price}, cap={capture_dist:.5f}). "
+                        f"Executing directly at MARKET to prevent 1-2 pip miss."
+                    )
+                    is_sane_limit = False
                 else:
                     # Normal resting BUY limit below market
                     if executable_tp_dist > 0 and bid_price >= (decision.entry_price + 0.40 * executable_tp_dist):
@@ -645,7 +660,10 @@ class ExecutionEngine:
                         return {"status": "BLOCKED", "reason": "LIMIT_SETUP_MISSED_BOAT_NEAR_TP"}
                     limit_dist = bid_price - decision.entry_price
                     if limit_dist > max_limit_dist:
-                        clamped_entry = self._quantize_price(bid_price - max_limit_dist, tick_sz, digits)
+                        clamped_entry = self._quantize_price(
+                            min(bid_price - min_pending_dist, bid_price - max_limit_dist + spread_dist),
+                            tick_sz, digits,
+                        )
                         logger.info(
                             f"⚡ BUY_LIMIT entry clamped from {decision.entry_price} to {clamped_entry} "
                             f"(drift={limit_dist:.5f} > max_limit_dist={max_limit_dist:.5f}). Distance to market bounded."
@@ -665,6 +683,12 @@ class ExecutionEngine:
                     logger.info(
                         f"⚡ SELL_LIMIT price ({decision.entry_price}) is within broker minimum distance of current ask ({ask_price}, min_stop={min_pending_dist:.5f}). "
                         f"Routing seamlessly to instant MARKET order."
+                    )
+                    is_sane_limit = False
+                elif valid_bid and (decision.entry_price - bid_price) <= capture_dist:
+                    logger.info(
+                        f"⚡ SELL_LIMIT price ({decision.entry_price}) is within micro capture band of live Bid ({bid_price}, cap={capture_dist:.5f}). "
+                        f"Executing directly at MARKET to prevent 1-2 pip miss."
                     )
                     is_sane_limit = False
                 else:
