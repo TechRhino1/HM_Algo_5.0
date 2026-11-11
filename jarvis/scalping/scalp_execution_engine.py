@@ -155,8 +155,10 @@ class ScalpExecutionEngine:
         # Step 2: Rejection
         step2_rejection = micro.absorption_detected or step1_sweep
 
-        # Step 3: Displacement Candle
-        step3_displacement = micro.displacement_ratio >= 0.50
+        # Step 3: Displacement Candle (Gold requires 60% body ratio to filter out pre-market false wicks)
+        is_gold = any(k in str(getattr(context, "symbol", "")).upper() for k in ("XAU", "GOLD"))
+        req_disp = 0.60 if is_gold else 0.50
+        step3_displacement = micro.displacement_ratio >= req_disp
 
         # Step 4: Micro BOS
         step4_micro_bos = bool(getattr(st, "bos", False) or getattr(st, "choch", False) or micro.state in (MicrostructureState.BREAKOUT, MicrostructureState.TRENDING))
@@ -178,7 +180,7 @@ class ScalpExecutionEngine:
         if not step2_rejection:
             missing_steps.append("Step 2: Rejection / Absorption")
         if not step3_displacement:
-            missing_steps.append("Step 3: Displacement Candle (>= 50% body)")
+            missing_steps.append(f"Step 3: Displacement Candle (>={int(req_disp*100)}% body)")
         if not step4_micro_bos:
             missing_steps.append("Step 4: Micro BOS")
         if not step5_retracement:

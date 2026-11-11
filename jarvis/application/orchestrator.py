@@ -1168,17 +1168,17 @@ class JarvisOrchestrator:
                 return False
             base_pct = float(getattr(self.risk_engine, "max_risk_per_trade_pct", 0.5) or 0.5)
             if equity < 250.0:
-                pct = min(base_pct * 3.0, 2.0)
+                pct = max(2.0, min(base_pct * 4.0, 2.5))
             elif equity < 500.0:
-                pct = min(base_pct * 2.0, 1.5)
+                pct = max(1.5, min(base_pct * 3.0, 2.0))
             elif equity < 1000.0:
-                pct = min(base_pct * 1.5, 1.0)
+                pct = max(1.0, min(base_pct * 2.0, 1.5))
             else:
                 pct = base_pct
             budget = equity * (pct / 100.0)
             ideal_lots = budget / (sl_pips * pip_value)
-            expected_lots = ideal_lots * 0.55
-            return expected_lots < 2.0 * max(volume_min, 0.01)
+            # If ideal lots allow at least 2 minimum lots (e.g. >= 0.02), book is splittable
+            return ideal_lots < (2.0 * max(volume_min, 0.01) - 1e-6)
         except Exception:
             return False
 
@@ -1628,10 +1628,15 @@ class JarvisOrchestrator:
         _decision_timer = DECISION_LATENCY.time(style=active_trade_style)
         _outcome = "error"
         try:
+            # Milestone-calibrated risk percentage for micro/nano accounts
+            active_equity = float(account.equity if account and account.equity > 0 else 10000.0)
+            active_risk_pct = 2.0 if active_equity < 250.0 else (1.5 if active_equity < 500.0 else 0.5)
+
             with _decision_timer:
                 decision = self.decision_engine.evaluate(
                     context, regime, analyst_reports, devil_report,
-                    account_balance=account.equity if account else 10000.0,
+                    account_balance=active_equity,
+                    risk_per_trade_pct=active_risk_pct,
                     current_drawdown_pct=dd_pct,
                     mtf_data=mtf_data,
                     recent_candles=self._df_to_candles(mtf_data.get("primary") if isinstance(mtf_data, dict) else None),
@@ -1962,7 +1967,7 @@ class JarvisOrchestrator:
             # Unified lot cap based on account tier (§4)
             if account:
                 _min_vol = float((sym_info or {}).get("volume_min", 0.01) or 0.01)
-                lots = min(lots, max(_min_vol, get_max_lot_cap(account.equity)))
+                lots = min(lots, max(_min_vol, get_max_lot_cap(account.equity, canonical_sym)))
 
             # Claim in-process lock & reserve risk capacity BEFORE sending to MT5
             risk_dist = abs(decision.entry_price - decision.stop_loss)
@@ -2362,7 +2367,7 @@ class JarvisOrchestrator:
                     lots = auth_res.get("lots", 0.01)
                     if account:
                         _min_vol = float((sym_info or {}).get("volume_min", 0.01) or 0.01)
-                        lots = min(lots, max(_min_vol, get_max_lot_cap(account.equity)))
+                        lots = min(lots, max(_min_vol, get_max_lot_cap(account.equity, canonical_sym)))
 
                     risk_dist = abs(decision.entry_price - decision.stop_loss)
                     tick_v = float(sym_info.get("trade_tick_value", 1.0) or 1.0)

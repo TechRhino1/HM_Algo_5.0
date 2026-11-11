@@ -454,9 +454,9 @@ SYMBOL_PROFILES: Dict[str, SymbolProfileConfig] = {
         canonical="XAUUSD",
         asset_class="COMMODITY",
         strategy_weights={
-            "TREND_FOLLOWING": 3.5,            # Empirically proven: 42.9% WR / +$53.79 PnL (unbanned!)
-            "TREND_PULLBACK": 3.0,             # Deep discount/premium OTE retracements
-            "CHOCH_STRUCTURAL_REVERSAL": 1.5,  # Demoted from 5.0 (4.9% WR) to stop counter-trend traps
+            "TREND_PULLBACK": 4.0,             # Primary: M5/M15 FVG retracements into discount/premium OTE
+            "TREND_FOLLOWING": 3.5,            # Momentum continuation during London/NY expansion
+            "CHOCH_STRUCTURAL_REVERSAL": 2.0,  # Confirmed structural change of character
             "LIQUIDITY_SWEEP_REVERSAL": 0.0,   # Ban counter-trend sweep fades (stops running into momentum)
             "BREAKOUT_EXPANSION": 0.0,         # Ban late breakout chasing
             "RANGE_MEAN_REVERSION": 0.0,
@@ -471,11 +471,11 @@ SYMBOL_PROFILES: Dict[str, SymbolProfileConfig] = {
         be_trigger_r=1.20,                     # Move to breakeven quickly at 1.20R
         runner_trail_atr=2.00,
         session_restriction=False,
-        # Expanded trading window: London + NY (06:00 to 21:00 UTC)
-        # Prevents missing legitimate Gold trades during European and late US sessions.
-        allowed_utc_hours=(6, 21),
+        # Prime trading window: London + NY (07:00 to 18:00 UTC)
+        # Filters low-liquidity overnight chop while keeping elite setups via premium exception
+        allowed_utc_hours=(7, 18),
         premium_window_exception=True,
-        premium_out_of_window_min_ai_score=80.0,
+        premium_out_of_window_min_ai_score=85.0,
         contract_size=100.0,
         pip_size=0.1,
         pip_value_per_lot=10.0,

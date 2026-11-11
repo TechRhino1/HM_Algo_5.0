@@ -51,13 +51,47 @@ def get_nano_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
     else:
         return (float("inf"), 1.0) if is_gold else (float("inf"), 0.50)
 
-def get_max_lot_cap(equity: float) -> float:
-    """Returns hard lot cap for risk protection on smaller accounts."""
+def get_milestone_risk_budget(equity: float, symbol: str = "") -> tuple[float, float]:
+    """
+    Returns (max_risk_usd, max_risk_pct) calibrated to the account growth milestone tier.
+    Enforces invariant dollar risk for small/micro accounts ($100 - $1,000+).
+    """
     eq = float(equity)
-    if eq <= 150.0:
-        return 0.01
+    sym = (symbol or "").upper()
+    is_gold = "XAU" in sym or "GOLD" in sym
+
+    if eq < 150.0:
+        # Tier 1 ($100 - $150 Seed Sniper): strict $2.00-$2.50 risk budget
+        return (3.00, 3.0) if is_gold else (2.50, 2.5)
     elif eq < 250.0:
-        return 0.02
+        # Tier 2 ($150 - $250 Micro Compounder): $3.00-$4.50 risk budget
+        return (5.00, 3.0) if is_gold else (4.00, 2.5)
+    elif eq < 500.0:
+        # Tier 3 ($250 - $500 Small Accelerator): $5.00-$8.00 risk budget
+        return (8.00, 2.5) if is_gold else (7.00, 2.0)
+    elif eq < 1000.0:
+        # Tier 4 ($500 - $1,000 Standard Transition): $10.00-$15.00 risk budget
+        return (15.00, 2.0) if is_gold else (12.00, 1.8)
+    else:
+        # Tier 5 (>= $1,000 Institutional): Percentage based
+        return (float("inf"), 1.0) if is_gold else (float("inf"), 0.50)
+
+def get_max_lot_cap(equity: float, symbol: str = "") -> float:
+    """
+    Returns hard lot cap for risk protection on smaller accounts.
+    Allows 0.02 lots on tight Forex stops on $100 accounts while keeping
+    Gold strictly capped at 0.01 lots until $150+ to protect against liquidation spikes.
+    """
+    eq = float(equity)
+    sym = (symbol or "").upper()
+    is_gold = "XAU" in sym or "GOLD" in sym
+
+    if eq < 150.0:
+        # Gold restricted to 0.01 lot floor on sub-$150 accounts; Forex allowed 0.02 lots on tight stops
+        return 0.01 if is_gold else 0.02
+    elif eq < 250.0:
+        # Gold unlocked for 0.02 lot multi-target split; Forex allowed up to 0.03 lots
+        return 0.02 if is_gold else 0.03
     elif eq < 500.0:
         return 0.05  # Enforce max 0.05 lots on $250-$500 micro accounts
     elif eq < 1000.0:

@@ -8,10 +8,10 @@ class PositionSizer:
     """Calculates risk-controlled lot sizes adjusted for symbol contract specifications and account balance."""
     
     @staticmethod
-    def get_max_lot_cap(account_balance: float) -> float:
+    def get_max_lot_cap(account_balance: float, symbol: str = "") -> float:
         """Returns safe maximum lot size cap based on account equity to protect against errant large lot entries."""
         from jarvis.risk.account_tier import get_max_lot_cap as tier_lot_cap
-        return tier_lot_cap(account_balance)
+        return tier_lot_cap(account_balance, symbol)
 
     @staticmethod
     def calculate_lot_size(
@@ -128,7 +128,7 @@ class PositionSizer:
                     (combined_scaler - 1.0) / 0.40 if combined_scaler > 1.0 else 0.0,
                     min(1.0, kelly_pct / 20.0) if kelly_pct > 0.0 else 0.0
                 )
-                micro_target_pct = 1.75 + (0.50 * conviction_metric)
+                micro_target_pct = 2.00 + (0.50 * conviction_metric)
                 scaled = micro_target_pct * invalidation_risk_coefficient
                 effective_risk_pct = min(2.50, max(1.50, scaled)) if invalidation_risk_coefficient >= 1.0 else max(0.80, scaled)
                 logger.info(
@@ -154,13 +154,21 @@ class PositionSizer:
             f"kelly {kelly_pct:.2f}% computed)"
         )
         from jarvis.data.symbol_registry import get_dollar_risk_per_price_unit
-        from jarvis.risk.account_tier import get_nano_risk_cap, get_max_lot_cap as tier_lot_cap
+        from jarvis.risk.account_tier import (
+            get_nano_risk_cap,
+            get_milestone_risk_budget,
+            get_max_lot_cap as tier_lot_cap
+        )
         
         sym_key = sym_name if sym_name else (str(symbol_info.get("canonical", "EURUSD")).upper() if symbol_info else "EURUSD")
         max_dollars, max_pct = get_nano_risk_cap(account_balance, sym_key)
+        milestone_dollars, milestone_pct = get_milestone_risk_budget(account_balance, sym_key)
 
         risk_amount_dollars = account_balance * (effective_risk_pct / 100.0)
-        if account_balance < 2500.0:
+        if account_balance < 250.0:
+            # Anchor risk amount to milestone budget ($2.50 FX / $3.00 Gold on Tier 1)
+            risk_amount_dollars = min(risk_amount_dollars, milestone_dollars)
+        elif account_balance < 2500.0:
             risk_amount_dollars = min(risk_amount_dollars, max_dollars)
         dollar_risk_per_unit = get_dollar_risk_per_price_unit(sym_key, symbol_info)
         dollar_risk_per_lot = risk_distance * dollar_risk_per_unit
@@ -223,13 +231,30 @@ class PositionSizer:
         if final_lots <= 0.0:
             return 0.0
 
-        # Hard lot cap from account tier system
-        lot_cap = tier_lot_cap(account_balance)
+        # Hard lot cap from account tier system (calibrated by symbol asset class)
+        lot_cap = tier_lot_cap(account_balance, sym_key)
         final_lots = min(final_lots, lot_cap)
+
+        # Enforce that scaled lot size does not exceed dollar risk budget
+        if final_lots * dollar_risk_per_lot > max_dollars:
+            final_lots = max(min_vol, math.floor((max_dollars / dollar_risk_per_lot) / vol_step) * vol_step)
+            final_lots = min(final_lots, lot_cap)
 
         # Volume step rounding (floor to prevent exceeding risk budget)
         steps = math.floor(((final_lots - min_vol) / vol_step) + 1e-9)
         final_lots = min(max_vol, max(min_vol, min_vol + steps * vol_step))
+
+        # Discrete milestone rounding: if the remainder is >= 70% of step and next step
+        # stays strictly within the milestone dollar budget, promote to enable book splitting
+        next_step = final_lots + vol_step
+        if (
+            account_balance < 500.0
+            and next_step <= lot_cap
+            and (raw_lots - final_lots) >= (vol_step * 0.70)
+            and (next_step * dollar_risk_per_lot) <= (milestone_dollars + 1e-9)
+        ):
+            final_lots = next_step
+
         digits = max(0, min(4, int(round(-math.log10(vol_step))))) if vol_step < 1.0 else 0
         return round(final_lots, digits)
 
