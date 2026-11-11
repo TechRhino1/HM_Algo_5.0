@@ -31,17 +31,37 @@ def is_micro_account(equity: float) -> bool:
     """True if account is in micro or small capital mode (< $500 equity)."""
     return float(equity) < 500.0
 
+def is_nano_account(equity: float) -> bool:
+    """True if account is in nano tier (< $250 equity)."""
+    return float(equity) < 250.0
+
+def get_nano_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
+    """
+    Returns (max_risk_usd, max_risk_pct) allowed for the account tier and symbol.
+    Unified source of truth for execution engine, sizing, and dashboard validation.
+    """
+    eq = float(equity)
+    sym = (symbol or "").upper()
+    is_gold = "XAU" in sym or "GOLD" in sym
+
+    if eq < 250.0:
+        return (6.00, 6.0) if is_gold else (5.00, 5.0)
+    elif eq < 2500.0:
+        return (28.00, 5.50) if is_gold else (12.00, 2.50)
+    else:
+        return (float("inf"), 1.0) if is_gold else (float("inf"), 0.50)
+
 def get_max_lot_cap(equity: float) -> float:
     """Returns hard lot cap for risk protection on smaller accounts."""
     eq = float(equity)
-    if eq < 100.0:
+    if eq <= 150.0:
         return 0.01
     elif eq < 250.0:
         return 0.02
     elif eq < 500.0:
-        return 0.03  # Enforce max 0.03 lots on $250-$500 micro accounts
+        return 0.05  # Enforce max 0.05 lots on $250-$500 micro accounts
     elif eq < 1000.0:
-        return 0.05
+        return 0.10
     elif eq < 2500.0:
         return 0.15
     else:

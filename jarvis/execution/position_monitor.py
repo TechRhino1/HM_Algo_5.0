@@ -60,7 +60,7 @@ SPREAD_BLOWOUT_MULT        = 2.0
 DISCRETIONARY_GRACE_PERIOD_SEC = 180.0
 
 # Manual trade isolation mode (Spec v2.1 Refinement 4)
-MANUAL_MANAGEMENT_MODE         = "AUTO_PILOT"
+MANUAL_MANAGEMENT_MODE         = "PROTECT_ONLY"
 
 # ── Institutional position protocols (2026-10-21 research round) ─────────────
 # 1. EVENT-WINDOW DE-RISK: a desk never carries open P&L through a scheduled
@@ -327,13 +327,15 @@ class PositionMonitorEngine:
         if ticket:
             if ticket in self._manual_trade_modes:
                 return self._manual_trade_modes[ticket]
-            if hasattr(self, "state_manager") and self.state_manager:
-                cache = getattr(self.state_manager, "_position_telemetry_cache", {}) or {}
-                cached_mode = cache.get(ticket, {}).get("monitoring_mode")
-                if cached_mode:
-                    self._manual_trade_modes[ticket] = str(cached_mode).upper().strip()
-                    return self._manual_trade_modes[ticket]
-        return getattr(self, "manual_mode", "AUTO_PILOT")
+            if hasattr(self, "state_manager") and self.state_manager and isinstance(getattr(self.state_manager, "_position_telemetry_cache", None), dict):
+                cache = self.state_manager._position_telemetry_cache
+                ticket_dict = cache.get(ticket)
+                if isinstance(ticket_dict, dict):
+                    cached_mode = ticket_dict.get("monitoring_mode")
+                    if isinstance(cached_mode, str) and cached_mode.strip():
+                        self._manual_trade_modes[ticket] = cached_mode.upper().strip()
+                        return self._manual_trade_modes[ticket]
+        return getattr(self, "manual_mode", MANUAL_MANAGEMENT_MODE)
 
     def _execute_exit(self, pos: PositionSnapshot, reason: str) -> bool:
         if self._is_manual_trade(pos):
@@ -615,10 +617,19 @@ class PositionMonitorEngine:
                 return
 
             now = time.time()
+            server_now = self.mt5_client.get_broker_time() if hasattr(self.mt5_client, "get_broker_time") else now
             for o in pending:
                 ticket = o.get("ticket")
                 setup_time = o.get("time_setup", 0)
-                age = (now - setup_time) if setup_time > 0 else 0
+                # Compute age: use local clock if paper mode (abs diff < 1800s), otherwise synchronize to broker server clock
+                if setup_time > 0:
+                    if abs(now - setup_time) < 1800:
+                        age = max(0.0, now - setup_time)
+                    else:
+                        age = max(0.0, server_now - setup_time)
+                else:
+                    age = 0.0
+
                 sym = o.get("symbol", "UNKNOWN")
                 otype = str(o.get("type", "")).upper()
                 if otype in ("2", "0") or otype == "ORDER_TYPE_BUY_LIMIT":
@@ -638,12 +649,6 @@ class PositionMonitorEngine:
                     allowed_age = 600.0
                 elif "SWING" in comment or "SWNG" in comment:
                     allowed_age = 1200.0
-
-                # Defensively handle raw broker server timestamps (GMT+3 offset) if skew occurred
-                if age < -3600:
-                    age = max(0.0, age + 10800.0)
-                elif age < 0:
-                    age = 0.0
 
                 cancel_reason = None
                 if age > allowed_age:
@@ -833,12 +838,12 @@ class PositionMonitorEngine:
                 pass
             else:
                 missing_sl = (pos.sl == 0 or pos.sl < 0.0001)
-                missing_tp = (pos.tp == 0 or pos.tp < 0.0001)
+                missing_tp = (pos.tp == 0 or pos.tp < 0.0001) and (missing_sl or effective_manual_mode != "PROTECT_ONLY")
                 dangerously_wide_sl = False
 
                 if not missing_sl:
                     sl_dist = abs(pos.open_price - pos.sl)
-                    dangerously_wide_sl = (sl_dist > (atr * DANGEROUS_SL_ATR_MULT))
+                    dangerously_wide_sl = (sl_dist > (atr * DANGEROUS_SL_ATR_MULT)) and (effective_manual_mode != "PROTECT_ONLY")
 
                 if missing_sl or missing_tp or dangerously_wide_sl:
                     ai_sl, ai_tp, ai_reason = self._calculate_master_trader_sl_tp(

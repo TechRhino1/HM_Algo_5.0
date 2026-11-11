@@ -301,6 +301,10 @@ class JarvisOrchestrator:
             return 120.0   # 2 minutes for scalp trades
         elif any(k in st for k in ("DAY", "INTRADAY")):
             return 240.0   # 4 minutes for day trades
+        elif "D1" in st or "DAILY" in st:
+            return 1800.0  # 30 minutes for D1 macro swing trades
+        elif "H4" in st:
+            return 900.0   # 15 minutes for H4 swing trades
         return 600.0       # 10 minutes for swing trades
 
     def _reconcile_positions_closed_while_down(self) -> None:
@@ -1033,8 +1037,8 @@ class JarvisOrchestrator:
         return first_unusable_frame(mtf_data)
 
     @staticmethod
-    def _count_entries_today(symbol: str) -> int:
-        """Rows written for this symbol since 00:00 UTC today, demo ledger basis.
+    def _count_entries_today(symbol: str, mode: Optional[str] = None) -> int:
+        """Rows written for this symbol since 00:00 UTC today, mode-scoped ledger basis.
 
         Used by the daily entry cap. Read-only on the canonical trade DB; any
         failure returns 0 (fails open — a counting outage must never freeze
@@ -1054,12 +1058,20 @@ class JarvisOrchestrator:
             conn = _sq.connect(f"file:{path}?mode=ro", uri=True, timeout=5.0)
             try:
                 canon = str(symbol).upper().strip()
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM executed_trades "
-                    "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
-                    "AND timestamp LIKE ?",
-                    (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0]),
-                ).fetchone()
+                if mode:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM executed_trades "
+                        "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
+                        "AND timestamp LIKE ? AND lower(execution_mode) = ?",
+                        (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0], str(mode).lower().strip()),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM executed_trades "
+                        "WHERE ticket IS NOT NULL AND (symbol = ? OR symbol = ?) "
+                        "AND timestamp LIKE ?",
+                        (canon, str(_resolve_sym(symbol).canonical).upper(), patterns[0]),
+                    ).fetchone()
                 return int(row[0]) if row else 0
             finally:
                 conn.close()
@@ -1387,7 +1399,7 @@ class JarvisOrchestrator:
         try:
             _daily_cap = int(getattr(SETTINGS.trading, "max_daily_entries_per_symbol", 4) or 4)
             if _daily_cap > 0 and not _is_premium_profile and not dry_run:
-                _today_count = self._count_entries_today(symbol)
+                _today_count = self._count_entries_today(symbol, mode=self.mode)
                 if _today_count >= _daily_cap:
                     auth_msg = f"DAILY_ENTRY_CAP_REACHED: {_today_count}/{_daily_cap} entries today"
                     logger.debug("%s: %s; automated entry paused.", symbol, auth_msg)
@@ -1647,6 +1659,10 @@ class JarvisOrchestrator:
                 return "DAY_TRADING"
             if s in ("SCALP", "SCALPING"):
                 return "SCALP"
+            if s in ("H4", "H4_SWING", "H4_TRADING"):
+                return "H4_SWING"
+            if s in ("D1", "D1_SWING", "DAILY", "D1_TRADING"):
+                return "D1_SWING"
             return s
 
         orch_style = (self.trade_style or "ALL").upper()
@@ -1812,7 +1828,7 @@ class JarvisOrchestrator:
                     and _p_score >= _p_floor
                 )
                 _post_cap = int(getattr(SETTINGS.trading, "max_daily_entries_per_symbol", 4) or 4)
-                if _post_cap > 0 and self._count_entries_today(symbol) >= _post_cap:
+                if _post_cap > 0 and self._count_entries_today(symbol, mode=self.mode) >= _post_cap:
                     if _premium_offwindow_elite:
                         logger.info(
                             "PREMIUM_CAP_BYPASS: %s off-window elite setup "
@@ -2050,7 +2066,7 @@ class JarvisOrchestrator:
         and order submission while leaving the decision and every authorization
         gate intact.
         """
-        active_styles = list(styles) if styles else ["SWING", "DAY_TRADING", "SCALP"]
+        active_styles = list(styles) if styles else ["SWING", "H4_SWING", "D1_SWING", "DAY_TRADING", "SCALP"]
         active_symbols = list(symbols) if symbols else list(self.symbols)
 
         # 2026-10-20 gold priority: premium-profile symbols (XAUUSD) are
@@ -2093,7 +2109,7 @@ class JarvisOrchestrator:
         }
         try:
             from concurrent.futures import TimeoutError as FuturesTimeoutError
-            for fut in as_completed(future_to_task, timeout=15.0):
+            for fut in as_completed(future_to_task, timeout=45.0):
                 sym, style = future_to_task[fut]
                 try:
                     res = fut.result(timeout=1.0)
@@ -2161,7 +2177,10 @@ class JarvisOrchestrator:
                     and candidate.decision_obj
                     and candidate.bias in ("BUY", "SELL")
                     and getattr(candidate.decision_obj, "bias", "") in ("BUY", "SELL")
-                    and getattr(candidate.decision_obj, "order_type", "") in ("MARKET", "LIMIT")
+                    and (
+                        getattr(candidate.decision_obj, "order_type", "MARKET") in ("MARKET", "LIMIT")
+                        or not isinstance(getattr(candidate.decision_obj, "order_type", None), str)
+                    )
                     and d_action not in ("WAIT", "HOLD", "NO_TRADE")
                     and (
                         d_action == "EXECUTE"

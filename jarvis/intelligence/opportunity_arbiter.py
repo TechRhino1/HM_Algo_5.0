@@ -239,7 +239,11 @@ class UniversalOpportunityArbiter:
 
         # Timeframe mapping
         style_norm = str(trade_style or "SWING").upper()
-        if "SWING" in style_norm:
+        if "D1" in style_norm or "DAILY" in style_norm:
+            timeframe = "W1/D1/H4"
+        elif "H4" in style_norm:
+            timeframe = "D1/H4/H1"
+        elif "SWING" in style_norm:
             timeframe = "D1/H4/H1"
         elif "DAY" in style_norm or "INTRADAY" in style_norm:
             timeframe = "H1/M15/M5"
@@ -369,15 +373,16 @@ class UniversalOpportunityArbiter:
         mtf_data = getattr(context, "mtf_alignment", {}) if context else {}
         is_counter_flush_kill = False
         if isinstance(mtf_data, dict):
+            macro_w1 = str(mtf_data.get("W1", "")).upper()
             macro_d1 = str(mtf_data.get("D1", "")).upper()
             macro_h1_bias = str(mtf_data.get("H1", "")).upper()
             macro_h4 = str(mtf_data.get("H4", "")).upper()
             m15_bias = str(mtf_data.get("M15", "")).upper()
             m5_bias = str(mtf_data.get("M5", "")).upper()
 
-            if bias == "BUY" and ("BEAR" in macro_d1 or "BEAR" in macro_h4):
+            if bias == "BUY" and ("BEAR" in macro_w1 or "BEAR" in macro_d1 or "BEAR" in macro_h4):
                 utility_score = round(utility_score * 0.65, 4)
-            elif bias == "SELL" and ("BULL" in macro_d1 or "BULL" in macro_h4):
+            elif bias == "SELL" and ("BULL" in macro_w1 or "BULL" in macro_d1 or "BULL" in macro_h4):
                 utility_score = round(utility_score * 0.65, 4)
 
             # Institutional Rule R2: Never short into active M15/M5 upward expansion or buy into active downward flush
@@ -545,6 +550,22 @@ class UniversalOpportunityArbiter:
             decision_val in ("EXECUTE", "READY", "WAIT") and
             not is_counter_flush_kill
         )
+
+        # Nano account risk ceiling sanity check ($50 - $250 equity)
+        from jarvis.risk.account_tier import is_nano_account, get_nano_risk_cap
+        from jarvis.data.symbol_registry import get_dollar_risk_per_price_unit
+        acct_bal = float(getattr(decision_obj, "account_balance", 0.0) or (getattr(context, "account_equity", 0.0) if context else 0.0) or 0.0)
+        if is_actionable and acct_bal > 0 and is_nano_account(acct_bal):
+            max_risk_usd, _ = get_nano_risk_cap(acct_bal, symbol)
+            mpu = float(get_dollar_risk_per_price_unit(symbol) or 0.0)
+            planned_risk_usd = abs(entry_price - stop_loss) * mpu * 0.01  # minimum 0.01 lot
+            if planned_risk_usd > max_risk_usd + 1e-9:
+                is_actionable = False
+                risk_factors.append(f"Exceeds nano account risk ceiling (${planned_risk_usd:.2f} > ${max_risk_usd:.2f})")
+                logger.info(
+                    f"🛡️ Arbiter: Disqualifying {symbol} setup for nano account (${acct_bal:.1f}): "
+                    f"0.01 lot planned risk ${planned_risk_usd:.2f} exceeds nano ceiling ${max_risk_usd:.2f}"
+                )
 
         return CandidateOpportunity(
             symbol=symbol,

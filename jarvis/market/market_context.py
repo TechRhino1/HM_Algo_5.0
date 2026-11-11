@@ -200,6 +200,18 @@ class MarketContextEngine:
             df_primary = mtf_data.get("primary", mtf_data.get("M15", pd.DataFrame()))
             df_setup = mtf_data.get("setup", mtf_data.get("H1", pd.DataFrame()))
             df_timing = mtf_data.get("timing", mtf_data.get("M5", pd.DataFrame()))
+        elif effective_style in ("H4_SWING", "H4"):
+            df_macro = mtf_data.get("macro", mtf_data.get("D1", pd.DataFrame()))
+            df_context = mtf_data.get("context", mtf_data.get("H4", pd.DataFrame()))
+            df_primary = mtf_data.get("primary", mtf_data.get("H4", pd.DataFrame()))
+            df_setup = mtf_data.get("setup", mtf_data.get("H4", pd.DataFrame()))
+            df_timing = mtf_data.get("timing", mtf_data.get("H1", mtf_data.get("M30", pd.DataFrame())))
+        elif effective_style in ("D1_SWING", "D1", "DAILY"):
+            df_macro = mtf_data.get("macro", mtf_data.get("W1", mtf_data.get("D1", pd.DataFrame())))
+            df_context = mtf_data.get("context", mtf_data.get("D1", pd.DataFrame()))
+            df_primary = mtf_data.get("primary", mtf_data.get("D1", pd.DataFrame()))
+            df_setup = mtf_data.get("setup", mtf_data.get("D1", pd.DataFrame()))
+            df_timing = mtf_data.get("timing", mtf_data.get("H4", mtf_data.get("H1", pd.DataFrame())))
         elif effective_style == "SCALP":
             df_macro = mtf_data.get("macro", mtf_data.get("H1", pd.DataFrame()))
             df_context = mtf_data.get("context", mtf_data.get("M15", pd.DataFrame()))
@@ -366,6 +378,48 @@ class MarketContextEngine:
                 _score_bias(m15_bias) * 0.30 +
                 _score_bias(h1_bias) * 0.20 +
                 _score_bias(m1_bias) * 0.10
+            )
+        elif style in ("H4_SWING", "H4"):
+            raw_d1 = self.structure_engine.analyze_structure(df_macro).bias if not df_macro.empty else "NEUTRAL"
+            raw_h4_ctx = self.structure_engine.analyze_structure(df_context).bias if not df_context.empty else "NEUTRAL"
+            raw_h4_pri = structure_primary.bias if not df_primary.empty else "NEUTRAL"
+            raw_h1 = self.structure_engine.analyze_structure(df_timing).bias if not df_timing.empty else "NEUTRAL"
+
+            d1_bias = _refine_bias_with_ema(df_macro, raw_d1)
+            h4_ctx_bias = _refine_bias_with_ema(df_context, raw_h4_ctx)
+            h4_pri_bias = _refine_bias_with_ema(df_primary, raw_h4_pri)
+            h1_bias = _refine_bias_with_ema(df_timing, raw_h1)
+
+            mtf_alignment["D1"] = d1_bias
+            mtf_alignment["H4"] = h4_pri_bias
+            mtf_alignment["H1"] = h1_bias
+
+            weighted_score = (
+                _score_bias(d1_bias) * 0.40 +
+                _score_bias(h4_ctx_bias) * 0.30 +
+                _score_bias(h4_pri_bias) * 0.20 +
+                _score_bias(h1_bias) * 0.10
+            )
+        elif style in ("D1_SWING", "D1", "DAILY"):
+            raw_w1 = self.structure_engine.analyze_structure(df_macro).bias if not df_macro.empty else "NEUTRAL"
+            raw_d1_ctx = self.structure_engine.analyze_structure(df_context).bias if not df_context.empty else "NEUTRAL"
+            raw_d1_pri = structure_primary.bias if not df_primary.empty else "NEUTRAL"
+            raw_h4 = self.structure_engine.analyze_structure(df_timing).bias if not df_timing.empty else "NEUTRAL"
+
+            w1_bias = _refine_bias_with_ema(df_macro, raw_w1)
+            d1_ctx_bias = _refine_bias_with_ema(df_context, raw_d1_ctx)
+            d1_pri_bias = _refine_bias_with_ema(df_primary, raw_d1_pri)
+            h4_bias = _refine_bias_with_ema(df_timing, raw_h4)
+
+            mtf_alignment["W1"] = w1_bias
+            mtf_alignment["D1"] = d1_pri_bias
+            mtf_alignment["H4"] = h4_bias
+
+            weighted_score = (
+                _score_bias(w1_bias) * 0.40 +
+                _score_bias(d1_ctx_bias) * 0.30 +
+                _score_bias(d1_pri_bias) * 0.20 +
+                _score_bias(h4_bias) * 0.10
             )
         else:  # SWING (default): D1 (40%), H4 (30%), H1 (20%), M15 (10%)
             raw_d1 = self.structure_engine.analyze_structure(df_macro).bias if not df_macro.empty else raw_d1_anchor

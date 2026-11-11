@@ -185,7 +185,11 @@ class ExposureManager:
         effective_max_open_positions = self.max_open_positions
         effective_portfolio_risk_cap = self.max_portfolio_risk_pct
         if account and account.equity > 0:
-            if account.equity < 500.0:
+            if account.equity < 250.0:
+                # Nano account tier ($50-$250): limit concurrent positions to 2 to prevent over-extension
+                effective_portfolio_risk_cap = max(self.max_portfolio_risk_pct, 12.0)
+                effective_max_open_positions = 2
+            elif account.equity < 500.0:
                 effective_portfolio_risk_cap = max(self.max_portfolio_risk_pct, 10.0)
                 effective_max_open_positions = max(self.max_open_positions, 4)
             elif account.equity < 1000.0:
@@ -214,8 +218,8 @@ class ExposureManager:
             total_risk_pct = (total_risk_usd / account.equity) * 100.0
             max_acceptable_dollar_risk = (effective_portfolio_risk_cap / 100.0) * account.equity
             if account.equity < 250.0:
-                effective_portfolio_risk_cap = max(self.max_portfolio_risk_pct, 16.0)
-                max_acceptable_dollar_risk = 35.0
+                effective_portfolio_risk_cap = max(self.max_portfolio_risk_pct, 12.0)
+                max_acceptable_dollar_risk = 12.0
             elif account.equity < 500.0:
                 effective_portfolio_risk_cap = max(self.max_portfolio_risk_pct, 12.0)
                 max_acceptable_dollar_risk = 45.0

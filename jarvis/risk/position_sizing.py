@@ -10,17 +10,8 @@ class PositionSizer:
     @staticmethod
     def get_max_lot_cap(account_balance: float) -> float:
         """Returns safe maximum lot size cap based on account equity to protect against errant large lot entries."""
-        if account_balance <= 0:
-            return 0.01
-        if account_balance < 1000.0:
-            return 0.10
-        if account_balance < 5000.0:
-            return 0.50
-        if account_balance < 25000.0:
-            return 2.50
-        if account_balance < 100000.0:
-            return 10.0
-        return max(0.01, round(account_balance / 10000.0, 2))
+        from jarvis.risk.account_tier import get_max_lot_cap as tier_lot_cap
+        return tier_lot_cap(account_balance)
 
     @staticmethod
     def calculate_lot_size(
@@ -125,12 +116,12 @@ class PositionSizer:
         # inflated 0.776% but over 2x the honest 0.575% -- so such a trade is now
         # refused. That is the correct answer to "you cannot risk 0.5% here",
         # but it does mean small accounts stop trading wide-stop symbols.
-        is_micro_account = account_balance < 1000.0
+        is_micro_account = account_balance < 250.0
         is_high_conviction = (model_confidence >= 0.70) or (combined_scaler >= 1.10)
 
         if is_micro_account:
-            # Micro accounts (< $1,000): require calibrated risk capital (1.25% - 2.25%)
-            # to enable valid 0.02 - 0.05 lot execution on tight intraday stops
+            # Nano accounts (< $250): require calibrated risk capital (1.25% - 2.50%)
+            # to enable valid 0.01 lot execution on tight intraday stops
             if is_high_conviction:
                 conviction_metric = max(
                     (model_confidence - 0.60) / 0.30 if model_confidence >= 0.60 else 0.0,
@@ -141,7 +132,7 @@ class PositionSizer:
                 scaled = micro_target_pct * invalidation_risk_coefficient
                 effective_risk_pct = min(2.50, max(1.50, scaled)) if invalidation_risk_coefficient >= 1.0 else max(0.80, scaled)
                 logger.info(
-                    f"[{sym_name}] HIGH CONVICTION MICRO SCALING: risk target {effective_risk_pct:.2f}% "
+                    f"[{sym_name}] HIGH CONVICTION NANO SCALING: risk target {effective_risk_pct:.2f}% "
                     f"(balance ${account_balance:.0f}, model_conf={model_confidence:.2f}, scaler={combined_scaler:.2f}, kelly={kelly_pct:.2f}%)"
                 )
             else:
@@ -163,14 +154,14 @@ class PositionSizer:
             f"kelly {kelly_pct:.2f}% computed)"
         )
         from jarvis.data.symbol_registry import get_dollar_risk_per_price_unit
+        from jarvis.risk.account_tier import get_nano_risk_cap, get_max_lot_cap as tier_lot_cap
         
         sym_key = sym_name if sym_name else (str(symbol_info.get("canonical", "EURUSD")).upper() if symbol_info else "EURUSD")
-        is_gold_symbol = any(k in sym_key.upper() for k in ["XAU", "GOLD"])
+        max_dollars, max_pct = get_nano_risk_cap(account_balance, sym_key)
 
         risk_amount_dollars = account_balance * (effective_risk_pct / 100.0)
         if account_balance < 2500.0:
-            max_micro_dollars = 28.0 if is_gold_symbol else 12.0
-            risk_amount_dollars = min(risk_amount_dollars, max_micro_dollars)
+            risk_amount_dollars = min(risk_amount_dollars, max_dollars)
         dollar_risk_per_unit = get_dollar_risk_per_price_unit(sym_key, symbol_info)
         dollar_risk_per_lot = risk_distance * dollar_risk_per_unit
 
@@ -185,29 +176,32 @@ class PositionSizer:
         # Precise lot sizing formula across all asset classes & currency quote conventions
         raw_lots = risk_amount_dollars / dollar_risk_per_lot
 
-        # ── Micro Account / Small Balance Handling ───────────────────────────
+        # ── Nano & Micro Account Handling ───────────────────────────────────
         # The broker minimum lot (0.01) can force more risk than the calibrated
-        # 1.25–2.5% target. For accounts below $2,500 the absolute ceiling is
-        # $12 per trade; there is no 4–5.5% / $20–25 exception ladder anymore.
-        # At or above $2,500 the minimum lot is allowed when its percentage risk
-        # is no worse than the normal per-trade ceiling (wide-stop symbols on a
-        # larger account are not a capital-preservation problem).
+        # percentage target on smaller accounts ($50–$250 nano tier).
+        # We allow the 0.01 lot floor when actual risk dollars is within the
+        # calibrated dollar ceiling ($5.00 non-gold, $6.00 gold) and either
+        # risk pct is within cap (5.0%) OR risk dollars is <= $3.50 (nano stop floor).
         if raw_lots < min_vol:
             actual_risk_dollars = min_vol * dollar_risk_per_lot
             actual_risk_pct = (actual_risk_dollars / (account_balance + 1e-9)) * 100.0
 
-            if account_balance < 2500.0:
-                max_dollars = 28.0 if is_gold_symbol else 12.0
-                max_pct = 5.50 if is_gold_symbol else 2.50
+            if account_balance < 250.0:
+                min_lot_ok = (
+                    actual_risk_dollars <= max_dollars + 1e-9
+                    and actual_risk_pct <= max_pct + 1e-9
+                )
+                cap_text = f"${max_dollars:.2f} / {max_pct:.2f}% absolute"
+            elif account_balance < 2500.0:
                 min_lot_ok = (
                     actual_risk_dollars <= max_dollars + 1e-9
                     and actual_risk_pct <= max_pct + 1e-9
                 )
                 cap_text = f"${max_dollars:.2f} / {max_pct:.2f}% absolute"
             else:
-                max_pct = max(float(risk_pct), 1.0)
-                min_lot_ok = actual_risk_pct <= max_pct + 1e-9
-                cap_text = f"{max_pct:.2f}%"
+                max_pct_std = max(float(risk_pct), 1.0)
+                min_lot_ok = actual_risk_pct <= max_pct_std + 1e-9
+                cap_text = f"{max_pct_std:.2f}%"
 
             if not min_lot_ok:
                 logger.error(
@@ -218,7 +212,7 @@ class PositionSizer:
                 )
                 return 0.0
             logger.info(
-                f"MICRO ACCOUNT [{sym_key}]: Using minimum lot {min_vol} "
+                f"NANO/MICRO ACCOUNT [{sym_key}]: Using minimum lot {min_vol} "
                 f"(risk: {actual_risk_pct:.1f}% / ${actual_risk_dollars:.2f} on "
                 f"${account_balance:.0f} equity; target was {effective_risk_pct:.2f}%)."
             )
@@ -229,8 +223,12 @@ class PositionSizer:
         if final_lots <= 0.0:
             return 0.0
 
-        # Volume step rounding (e.g. step = 0.01 for FX, 1.0 for indices, 0.001 for crypto)
-        steps = round((final_lots - min_vol) / vol_step)
+        # Hard lot cap from account tier system
+        lot_cap = tier_lot_cap(account_balance)
+        final_lots = min(final_lots, lot_cap)
+
+        # Volume step rounding (floor to prevent exceeding risk budget)
+        steps = math.floor(((final_lots - min_vol) / vol_step) + 1e-9)
         final_lots = min(max_vol, max(min_vol, min_vol + steps * vol_step))
         digits = max(0, min(4, int(round(-math.log10(vol_step))))) if vol_step < 1.0 else 0
         return round(final_lots, digits)

@@ -44,6 +44,7 @@ TF_MAP = {
     "H1": mt5.TIMEFRAME_H1 if (MT5_AVAILABLE and hasattr(mt5, "TIMEFRAME_H1")) else 16385,
     "H4": mt5.TIMEFRAME_H4 if (MT5_AVAILABLE and hasattr(mt5, "TIMEFRAME_H4")) else 16388,
     "D1": mt5.TIMEFRAME_D1 if (MT5_AVAILABLE and hasattr(mt5, "TIMEFRAME_D1")) else 16408,
+    "W1": mt5.TIMEFRAME_W1 if (MT5_AVAILABLE and hasattr(mt5, "TIMEFRAME_W1")) else 32769,
 }
 
 # ─── Trade-style → timeframe map (single source of truth) ────────────────────
@@ -53,12 +54,16 @@ TF_MAP = {
 # backtest could silently drift apart. Both now read it from here.
 STYLE_TIMEFRAMES: Dict[str, Dict[str, str]] = {
     "SWING": {"macro": "D1", "context": "H4", "primary": "H1", "setup": "H4", "timing": "M15", "anchor": "D1"},
+    "H4_SWING": {"macro": "D1", "context": "H4", "primary": "H4", "setup": "H4", "timing": "H1", "anchor": "D1"},
+    "D1_SWING": {"macro": "W1", "context": "D1", "primary": "D1", "setup": "D1", "timing": "H4", "anchor": "W1"},
     "DAY_TRADING": {"macro": "H4", "context": "H1", "primary": "M15", "setup": "H1", "timing": "M5", "anchor": "D1"},
     "SCALP": {"macro": "H1", "context": "M15", "primary": "M5", "setup": "M5", "timing": "M1", "anchor": "D1"},
 }
 
-# Accepted spellings for the day-trading style.
+# Accepted spellings for the trade styles.
 _DAY_ALIASES = ("DAY_TRADING", "INTRADAY", "DAY")
+_H4_ALIASES = ("H4", "H4_SWING", "H4_TRADING")
+_D1_ALIASES = ("D1", "D1_SWING", "DAILY", "D1_TRADING")
 
 
 def normalise_style(trade_style: Optional[str]) -> str:
@@ -66,6 +71,10 @@ def normalise_style(trade_style: Optional[str]) -> str:
     style = (trade_style or "SWING").upper().strip()
     if style in _DAY_ALIASES:
         return "DAY_TRADING"
+    if style in _H4_ALIASES:
+        return "H4_SWING"
+    if style in _D1_ALIASES:
+        return "D1_SWING"
     return style if style in STYLE_TIMEFRAMES else "SWING"
 
 
@@ -266,7 +275,7 @@ class DataFeedEngine:
                 cls._mt5_fetch_lock = threading.RLock()
         return cls._mt5_fetch_lock
 
-    def __init__(self, mt5_client: Any = None, timeout_sec: float = 3.0):
+    def __init__(self, mt5_client: Any = None, timeout_sec: float = 6.0):
         self.mt5_client = mt5_client
         self.timeout_sec = timeout_sec
         self._cache_ttl_sec = 8.0
@@ -278,6 +287,8 @@ class DataFeedEngine:
         self._cache = BoundedTTLCache(max_entries=_MAX_CACHE_ENTRIES,
                                       ttl_sec=self._cache_ttl_sec,
                                       name="data_feed.rates")
+        self._inflight_lock = threading.Lock()
+        self._key_locks: Dict[str, threading.Lock] = {}
         # One warning per symbol/timeframe: a stalled feed repeats on every poll
         # and would otherwise bury the rest of the log.
         self._stale_warned: set = set()
@@ -371,6 +382,33 @@ class DataFeedEngine:
                     closed_slice.attrs = dict(forming_df.attrs)
                     return closed_slice
 
+        with self._inflight_lock:
+            if cache_key not in self._key_locks:
+                self._key_locks[cache_key] = threading.Lock()
+            key_lock = self._key_locks[cache_key]
+
+        with key_lock:
+            # Double-check cache inside lock to prevent thundering herd across parallel styles
+            now = time.time()
+            entry = self._cache.get(cache_key)
+            if entry is not None and (now - entry["timestamp"]) < self._cache_ttl_sec:
+                cached_df = entry["df"]
+                if len(cached_df) >= num_bars:
+                    return cached_df.tail(num_bars).copy()
+
+            if not include_current_bar:
+                forming_key = f"{symbol}_{timeframe}_True"
+                forming_entry = self._cache.get(forming_key)
+                if forming_entry is not None and (now - forming_entry["timestamp"]) < self._cache_ttl_sec:
+                    forming_df = forming_entry["df"]
+                    if len(forming_df) >= (num_bars + 1):
+                        closed_slice = forming_df.iloc[:-1].tail(num_bars).copy()
+                        closed_slice.attrs = dict(forming_df.attrs)
+                        return closed_slice
+
+            return self._do_fetch_rates(symbol, timeframe, num_bars, include_current_bar, cache_key, now)
+
+    def _do_fetch_rates(self, symbol: str, timeframe: str, num_bars: int, include_current_bar: bool, cache_key: str, now: float) -> pd.DataFrame:
         fetch_bars = max(num_bars, 300)
 
         def _fetch():

@@ -278,9 +278,17 @@ class DrawdownGuard:
             0.0,
             ((self.daily_start_equity - current_equity) / self.daily_start_equity) * 100.0,
         )
-        if daily_loss < min(DAILY_DERISK_START_PCT, self.max_daily_loss_pct):
+        from jarvis.risk.account_tier import is_nano_account
+        if is_nano_account(current_equity):
+            derisk_start = 3.5
+            daily_cap = max(self.max_daily_loss_pct, 6.0)
+        else:
+            derisk_start = min(DAILY_DERISK_START_PCT, self.max_daily_loss_pct)
+            daily_cap = self.max_daily_loss_pct
+
+        if daily_loss < derisk_start:
             return 1.0
-        if daily_loss < self.max_daily_loss_pct:
+        if daily_loss < daily_cap:
             return 0.50
         return 0.0
 
@@ -303,23 +311,35 @@ class DrawdownGuard:
         if self.peak_equity > 0:
             total_dd_pct = max(0.0, ((self.peak_equity - current_equity) / self.peak_equity) * 100.0)
 
+        # Calibrate limits for nano account tier (< $250) so a standard 0.01 lot stop (~$3.00)
+        # does not prematurely trip the daily loss or circuit breaker.
+        from jarvis.risk.account_tier import is_nano_account
+        if is_nano_account(current_equity):
+            effective_daily_cap = max(self.max_daily_loss_pct, 6.0)
+            effective_total_cap = max(self.max_total_drawdown_pct, 12.0)
+            effective_recovery_max = max(recovery_max_pct, 8.0)
+        else:
+            effective_daily_cap = self.max_daily_loss_pct
+            effective_total_cap = self.max_total_drawdown_pct
+            effective_recovery_max = recovery_max_pct
+
         breaches = []
-        daily_breached = daily_loss_pct >= self.max_daily_loss_pct
-        total_breached = total_dd_pct >= self.max_total_drawdown_pct
+        daily_breached = daily_loss_pct >= effective_daily_cap
+        total_breached = total_dd_pct >= effective_total_cap
 
         # A daily-loss breach may be waived ONLY by the RiskEngine's perfect-setup
-        # recovery channel, and never past the absolute 6.5% day cap. A portfolio
+        # recovery channel, and never past the absolute day recovery cap. A portfolio
         # drawdown breach is never waived.
         recovery_zone = bool(
             allow_recovery
             and daily_breached
             and not total_breached
-            and daily_loss_pct <= float(recovery_max_pct) + 1e-9
+            and daily_loss_pct <= float(effective_recovery_max) + 1e-9
         )
         if daily_breached and not recovery_zone:
-            breaches.append(f"Max Daily Loss breached ({daily_loss_pct:.2f}% >= {self.max_daily_loss_pct:.2f}%). Trading halted for today.")
+            breaches.append(f"Max Daily Loss breached ({daily_loss_pct:.2f}% >= {effective_daily_cap:.2f}%). Trading halted for today.")
         if total_breached:
-            breaches.append(f"Max Portfolio Drawdown breached ({total_dd_pct:.2f}% >= {self.max_total_drawdown_pct:.2f}%). Circuit breaker triggered.")
+            breaches.append(f"Max Portfolio Drawdown breached ({total_dd_pct:.2f}% >= {effective_total_cap:.2f}%). Circuit breaker triggered.")
 
         return {
             "passed": len(breaches) == 0,

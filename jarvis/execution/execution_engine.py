@@ -7,7 +7,7 @@ Orchestrates order dispatch, mode verification (LIVE/PAPER/DEMO), and execution 
 """
 
 import logging
-
+import math
 import uuid
 
 from typing import Dict, Any, Optional
@@ -303,14 +303,11 @@ class ExecutionEngine:
 
 
         stops_level = int(sym_spec.get("trade_stops_level", 0) or 0)
-
         spread_points = int(sym_spec.get("spread", 0) or 0)
-
         spread_dist = spread_points * point
-
         stops_level_dist = stops_level * point
-
         min_broker_stop_dist = max(stops_level_dist, spread_dist * 2.0, 10.0 * point)
+        min_pending_dist = max(stops_level_dist, float(tick_sz))
 
 
 
@@ -326,25 +323,9 @@ class ExecutionEngine:
 
         if executable_sl_dist > planned_sl_dist + 1e-9:
 
-            # RULE 1: If broker minimum stop distance is > 2.0x planned stop,
+            # Take Profit MUST be proportionally expanded
 
-            # the scalp/intraday geometry is fundamentally invalid for this broker. BLOCK ORDER!
-
-            if executable_sl_dist > (planned_sl_dist * 2.0):
-
-                logger.error(
-
-                    f"🛑 EXECUTION BLOCKED for {decision.symbol}: Broker stops_level ({executable_sl_dist:.2f} pts) "
-
-                    f"is > 2.0x planned stop ({planned_sl_dist:.2f} pts). Scalp geometry invalid on this broker."
-
-                )
-
-                return {"status": "BLOCKED", "reason": f"Broker stops_level exceeds 2x planned stop ({executable_sl_dist:.2f} > {planned_sl_dist*2:.2f})"}
-
-
-
-            # RULE 2: If stop is modestly widened, Take Profit MUST be proportionally expanded
+            # to preserve at least 1.8:1 (or 2.0:1 for Gold) Risk:Reward ratio!
 
             # to preserve at least 1.8:1 (or 2.0:1 for Gold) Risk:Reward ratio!
 
@@ -473,19 +454,58 @@ class ExecutionEngine:
         _equity = float(getattr(_acct, "equity", 0.0) or 0.0) if _acct else 0.0
         _max_pct = float(getattr(_RISK_SETTINGS.risk, "max_risk_per_trade_pct", 0.0) or 0.0)
         if _equity > 0 and _max_pct > 0:
+            _vol_min = float(sym_spec.get("volume_min", 0.01) or 0.01)
+            _vol_step = float(sym_spec.get("volume_step", 0.01) or 0.01)
             _risk_usd = executable_sl_dist * dollar_risk_per_price_unit * float(lots)
-            _budget_usd = _equity * (_max_pct / 100.0)
+            from jarvis.risk.account_tier import get_nano_risk_cap
+            _max_allowed_usd, _max_allowed_pct = get_nano_risk_cap(_equity, decision.symbol)
+            if _equity < 250.0:
+                _pct_budget = _equity * (_max_allowed_pct / 100.0)
+                _budget_usd = max(min(_pct_budget, _max_allowed_usd), min(3.50, _max_allowed_usd))
+                _display_pct = (_budget_usd / _equity) * 100.0
+            elif _equity < 2500.0 and float(lots) <= _vol_min + 1e-9:
+                # Minimum-lot allowance for accounts under $2,500 (§3 & account_tier):
+                # When broker enforces minimum lot (0.01 or 0.02) that exceeds the 0.50% nominal target,
+                # permit execution up to the calibrated tier ceiling ($12 non-gold / $28 gold, max 2.5% / 5.5%).
+                _budget_usd = min(_max_allowed_usd, _equity * (_max_allowed_pct / 100.0))
+                _display_pct = (_budget_usd / _equity) * 100.0
+            else:
+                _budget_usd = _equity * (_max_pct / 100.0)
+                _display_pct = _max_pct
+
+            # Auto size-down volume if planned lots breach the equity risk budget
+            if _risk_usd > (_budget_usd * 1.01) + 0.01:
+                _risk_per_lot = executable_sl_dist * dollar_risk_per_price_unit
+                if _risk_per_lot > 0 and float(lots) > _vol_min:
+                    _safe_lots = _budget_usd / _risk_per_lot
+                    _safe_lots = max(_vol_min, math.floor(_safe_lots / _vol_step) * _vol_step)
+                    _step_dec = 2
+                    _step_str = f"{_vol_step:.8f}".rstrip("0")
+                    if "." in _step_str:
+                        _step_dec = len(_step_str.split(".")[1])
+                    else:
+                        _step_dec = 0
+                    _safe_lots = round(_safe_lots, _step_dec)
+                    _safe_risk = _safe_lots * _risk_per_lot
+                    if _safe_lots >= _vol_min and _safe_risk <= (_budget_usd * 1.01) + 0.01:
+                        logger.info(
+                            f"🛡️ SIZING DOWN VOLUME to fit risk ceiling: {lots} lots -> {_safe_lots} lots "
+                            f"(${_safe_risk:.2f} <= ${_budget_usd:.2f} ceiling on ${_equity:.2f} equity)"
+                        )
+                        lots = _safe_lots
+                        _risk_usd = _safe_risk
+
             if _risk_usd > (_budget_usd * 1.01) + 0.01:
                 logger.error(
                     f"🛑 REJECTED DISPATCH for {decision.symbol}: monetary risk "
-                    f"${_risk_usd:.2f} exceeds {_max_pct:.2f}% of equity "
+                    f"${_risk_usd:.2f} exceeds {_display_pct:.2f}% of equity "
                     f"(${_budget_usd:.2f} on ${_equity:.2f}) at {lots} lots and "
                     f"a {executable_sl_dist:.5f} stop."
                 )
                 return {
                     "status": "BLOCKED",
                     "reason": (
-                        f"Risk ${_risk_usd:.2f} exceeds {_max_pct:.2f}% equity "
+                        f"Risk ${_risk_usd:.2f} exceeds {_display_pct:.2f}% equity "
                         f"ceiling (${_budget_usd:.2f})"
                     ),
                 }
@@ -504,7 +524,8 @@ class ExecutionEngine:
 
 
 
-        logger.info(f"DISPATCHING ORDER [{mode.value}]: {decision.bias} {lots} {decision.symbol} @ Entry={decision.entry_price} SL={decision.stop_loss} TP={decision.take_profit}")
+        mode_val = getattr(mode, "value", str(mode))
+        logger.info(f"DISPATCHING ORDER [{mode_val}]: {decision.bias} {lots} {decision.symbol} @ Entry={decision.entry_price} SL={decision.stop_loss} TP={decision.take_profit}")
 
 
 
@@ -586,61 +607,82 @@ class ExecutionEngine:
 
                 atr_val = (float(cur_price) * 0.005) if isinstance(cur_price, (int, float)) and cur_price > 0 else 1.0
 
-            max_tolerable_drift = max(0.20 * atr_val, float(tick_sz) * 10)
+            max_tolerable_drift = max(0.20 * atr_val, spread_dist * 2.0, float(tick_sz) * 10)
+            style_name = str(getattr(decision, "style", "SWING") or "SWING").upper()
+            if "SCALP" in style_name:
+                max_limit_dist = min(0.60 * atr_val, cur_price * 0.006)
+                order_ttl_sec = 300
+            elif "DAY" in style_name:
+                max_limit_dist = min(0.90 * atr_val, cur_price * 0.015)
+                order_ttl_sec = 600
+            else:
+                max_limit_dist = min(1.35 * atr_val, cur_price * 0.030)
+                order_ttl_sec = 1200
+            max_limit_dist = max(max_limit_dist, spread_dist * 4.0, float(tick_sz) * 15)
 
-
-
-            if decision.bias == "BUY" and valid_bid and decision.entry_price >= (bid_price - min_broker_stop_dist):
-
-                drift = abs(bid_price - decision.entry_price)
-
-                if drift > max_tolerable_drift:
-
+            if decision.bias == "BUY" and valid_bid:
+                if decision.entry_price >= (bid_price - min_pending_dist):
+                    if decision.entry_price > bid_price:
+                        drift = decision.entry_price - bid_price
+                        if drift > max_tolerable_drift:
+                            logger.info(
+                                f"🚫 BUY_LIMIT rejected: market bid ({bid_price}) has drifted away from intended structural limit "
+                                f"({decision.entry_price}, drift={drift:.5f} > {max_tolerable_drift:.5f}). Chasing prohibited."
+                            )
+                            return {"status": "BLOCKED", "reason": "LIMIT_DRIFT_EXCEEDED_NO_CHASE"}
                     logger.info(
-
-                        f"🚫 BUY_LIMIT rejected: market bid ({bid_price}) has drifted away from intended structural limit "
-
-                        f"({decision.entry_price}, drift={drift:.5f} > {max_tolerable_drift:.5f}). Chasing prohibited."
-
+                        f"⚡ BUY_LIMIT price ({decision.entry_price}) is within broker minimum distance of current bid ({bid_price}, min_stop={min_pending_dist:.5f}). "
+                        f"Routing seamlessly to instant MARKET order."
                     )
+                    is_sane_limit = False
+                else:
+                    # Normal resting BUY limit below market
+                    if executable_tp_dist > 0 and bid_price >= (decision.entry_price + 0.40 * executable_tp_dist):
+                        logger.info(
+                            f"🚫 BUY_LIMIT rejected: market bid ({bid_price}) has already traversed >= 40% towards TP "
+                            f"(entry={decision.entry_price}, tp_dist={executable_tp_dist:.5f}). Setup boat has sailed."
+                        )
+                        return {"status": "BLOCKED", "reason": "LIMIT_SETUP_MISSED_BOAT_NEAR_TP"}
+                    limit_dist = bid_price - decision.entry_price
+                    if limit_dist > max_limit_dist:
+                        clamped_entry = self._quantize_price(bid_price - max_limit_dist, tick_sz, digits)
+                        logger.info(
+                            f"⚡ BUY_LIMIT entry clamped from {decision.entry_price} to {clamped_entry} "
+                            f"(drift={limit_dist:.5f} > max_limit_dist={max_limit_dist:.5f}). Distance to market bounded."
+                        )
+                        decision.entry_price = clamped_entry
 
-                    return {"status": "BLOCKED", "reason": "LIMIT_DRIFT_EXCEEDED_NO_CHASE"}
-
-                logger.info(
-
-                    f"⚡ BUY_LIMIT price ({decision.entry_price}) is within broker minimum distance of current bid ({bid_price}, min_stop={min_broker_stop_dist:.5f}). "
-
-                    f"Routing seamlessly to instant MARKET order."
-
-                )
-
-                is_sane_limit = False
-
-            elif decision.bias == "SELL" and valid_ask and decision.entry_price <= (ask_price + min_broker_stop_dist):
-
-                drift = abs(decision.entry_price - ask_price)
-
-                if drift > max_tolerable_drift:
-
+            elif decision.bias == "SELL" and valid_ask:
+                if decision.entry_price <= (ask_price + min_pending_dist):
+                    if decision.entry_price < ask_price:
+                        drift = ask_price - decision.entry_price
+                        if drift > max_tolerable_drift:
+                            logger.info(
+                                f"🚫 SELL_LIMIT rejected: market ask ({ask_price}) has drifted away from intended structural limit "
+                                f"({decision.entry_price}, drift={drift:.5f} > {max_tolerable_drift:.5f}). Chasing prohibited."
+                            )
+                            return {"status": "BLOCKED", "reason": "LIMIT_DRIFT_EXCEEDED_NO_CHASE"}
                     logger.info(
-
-                        f"🚫 SELL_LIMIT rejected: market ask ({ask_price}) has drifted away from intended structural limit "
-
-                        f"({decision.entry_price}, drift={drift:.5f} > {max_tolerable_drift:.5f}). Chasing prohibited."
-
+                        f"⚡ SELL_LIMIT price ({decision.entry_price}) is within broker minimum distance of current ask ({ask_price}, min_stop={min_pending_dist:.5f}). "
+                        f"Routing seamlessly to instant MARKET order."
                     )
-
-                    return {"status": "BLOCKED", "reason": "LIMIT_DRIFT_EXCEEDED_NO_CHASE"}
-
-                logger.info(
-
-                    f"⚡ SELL_LIMIT price ({decision.entry_price}) is within broker minimum distance of current ask ({ask_price}, min_stop={min_broker_stop_dist:.5f}). "
-
-                    f"Routing seamlessly to instant MARKET order."
-
-                )
-
-                is_sane_limit = False
+                    is_sane_limit = False
+                else:
+                    # Normal resting SELL limit above market
+                    if executable_tp_dist > 0 and ask_price <= (decision.entry_price - 0.40 * executable_tp_dist):
+                        logger.info(
+                            f"🚫 SELL_LIMIT rejected: market ask ({ask_price}) has already traversed >= 40% towards TP "
+                            f"(entry={decision.entry_price}, tp_dist={executable_tp_dist:.5f}). Setup boat has sailed."
+                        )
+                        return {"status": "BLOCKED", "reason": "LIMIT_SETUP_MISSED_BOAT_NEAR_TP"}
+                    limit_dist = decision.entry_price - ask_price
+                    if limit_dist > max_limit_dist:
+                        clamped_entry = self._quantize_price(ask_price + max_limit_dist, tick_sz, digits)
+                        logger.info(
+                            f"⚡ SELL_LIMIT entry clamped from {decision.entry_price} to {clamped_entry} "
+                            f"(drift={limit_dist:.5f} > max_limit_dist={max_limit_dist:.5f}). Distance to market bounded."
+                        )
+                        decision.entry_price = clamped_entry
 
 
 
@@ -684,7 +726,9 @@ class ExecutionEngine:
 
                     tp_price=decision.take_profit,
 
-                    comment=comment
+                    comment=comment,
+
+                    expiration_sec=order_ttl_sec
 
                 )
 

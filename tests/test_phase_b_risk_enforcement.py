@@ -69,6 +69,7 @@ def _mock_decision(symbol="EURUSD", bias="BUY", entry=1.1000, sl=1.0950, tp=1.11
 def test_drawdown_tier_multiplier_scaling():
     """Verify that drawdown tier multiplier scales lots and halts at >= 8% DD."""
     re = RiskEngine(is_backtest=True)
+    re.drawdown_guard.max_total_drawdown_pct = 15.0
     # Re-anchor peak equity at 10,000
     re.drawdown_guard.reset_baselines(10000.0)
 

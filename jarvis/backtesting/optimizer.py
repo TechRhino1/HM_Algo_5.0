@@ -112,10 +112,12 @@ DEFAULT_DAYS = 183
 # another.
 PRIMARY_TIMEFRAME: Dict[str, str] = {
     "SWING": "H1",
+    "H4_SWING": "H4",
+    "D1_SWING": "D1",
     "DAY_TRADING": "M15",
     "SCALP": "M5",
 }
-STYLES: Tuple[str, ...] = ("SWING", "DAY_TRADING", "SCALP")
+STYLES: Tuple[str, ...] = ("SWING", "H4_SWING", "D1_SWING", "DAY_TRADING", "SCALP")
 
 OBJECTIVES: Tuple[str, ...] = ("expectancy_r", "total_r", "profit_factor", "calmar")
 

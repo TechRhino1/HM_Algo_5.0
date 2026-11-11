@@ -243,6 +243,7 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
         symbol: Optional[str] = None,
         price: Optional[float] = None,
         sl: Optional[float] = None,
+        equity: Optional[float] = None,
     ) -> Optional[str]:
         """Pre-trade gate for manual/pending orders.
 
@@ -257,19 +258,24 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             return f"Circuit breaker tripped: {getattr(cb, 'trip_reason', 'Active circuit breaker halt')}"
         
         acc = self.mt5_client.get_account_snapshot() if hasattr(self, "mt5_client") and self.mt5_client else None
-        if acc is None:
-            equity = 0.0
-        elif isinstance(acc, dict):
-            equity = float(acc.get("equity", 0.0) or 0.0)
+        if equity is None:
+            if acc is None:
+                equity = 0.0
+            elif isinstance(acc, dict):
+                equity = float(acc.get("equity", 0.0) or 0.0)
+            else:
+                equity = float(getattr(acc, "equity", 0.0) or 0.0)
         else:
-            equity = float(getattr(acc, "equity", 0.0) or 0.0)
+            equity = float(equity)
 
         dg = getattr(self.orchestrator, "drawdown_guard", None) if hasattr(self, "orchestrator") else None
         if dg and equity > 0:
             if isinstance(acc, dict):
                 balance = float(acc.get("balance", equity) or equity)
-            else:
+            elif acc is not None:
                 balance = float(getattr(acc, "balance", equity) or equity)
+            else:
+                balance = equity
             dd = dg.check_limits(equity, balance)
             if not dd.get("passed", False):
                 breaches = dd.get("breaches") or ["drawdown limit reached"]
@@ -283,7 +289,9 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
         # Open-position cap, measured from the broker rather than assumed.
         try:
             from jarvis.config.settings import SETTINGS
-            max_positions = int(getattr(SETTINGS.risk, "max_open_positions", 3) or 3)
+            from jarvis.risk.account_tier import is_nano_account
+            configured_max = int(getattr(SETTINGS.risk, "max_open_positions", 3) or 3)
+            max_positions = 2 if is_nano_account(equity) else configured_max
             if hasattr(self, "mt5_client") and self.mt5_client:
                 live_positions = self.mt5_client.get_open_positions() or []
                 if len(live_positions) >= max_positions:
@@ -304,10 +312,22 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                 pct = float(getattr(SETTINGS.risk, "max_risk_per_trade_pct", 0.5) or 0.5)
                 mpu = float(get_dollar_risk_per_price_unit(symbol) or 0.0)
                 risk_usd = abs(float(price) - float(sl)) * mpu * float(lots)
-                ceiling = equity * pct / 100.0
+                from jarvis.risk.account_tier import get_nano_risk_cap
+                max_allowed_usd, max_allowed_pct = get_nano_risk_cap(equity, str(symbol))
+                if equity < 250.0:
+                    pct_ceiling = equity * (max_allowed_pct / 100.0)
+                    ceiling = max(min(pct_ceiling, max_allowed_usd), min(3.50, max_allowed_usd))
+                    cap_pct = (ceiling / equity) * 100.0
+                elif equity < 2500.0:
+                    ceiling = min(equity * (max_allowed_pct / 100.0), max_allowed_usd)
+                    cap_pct = (ceiling / equity) * 100.0
+                else:
+                    ceiling = equity * pct / 100.0
+                    cap_pct = pct
+
                 if mpu <= 0 or risk_usd > ceiling + 1e-9:
                     return (
-                        f"Trade risk ${risk_usd:.2f} ({pct:.2f}% ceiling is ${ceiling:.2f}) "
+                        f"Trade risk ${risk_usd:.2f} ({cap_pct:.2f}% ceiling is ${ceiling:.2f}) "
                         f"for {lots} lots on {symbol}; tighten the stop or reduce size."
                     )
             except Exception as exc:
@@ -356,10 +376,10 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                     pos = cls.mt5_client.get_open_positions()
                     cls.state_manager.sync_broker_state(acc, pos)
 
-                    # 2. Standalone Fallback: Sweep Multi-Asset Radar across all 3 active styles
+                    # 2. Standalone Fallback: Sweep Multi-Asset Radar across all active styles
                     radar_results = []
                     account = cls.state_manager.account or acc
-                    active_styles = ["SWING", "DAY_TRADING", "SCALP"]
+                    active_styles = ["SWING", "H4_SWING", "D1_SWING", "DAY_TRADING", "SCALP"]
 
                     for t_style in active_styles:
                         for sym in symbols:
@@ -440,7 +460,13 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                                 else:
                                     status_label = "NO SETUP"
 
-                                tf_str = "D1/H4/H1" if t_style == "SWING" else ("H1/M15/M5" if t_style in ("DAY_TRADING", "INTRADAY", "DAY") else "M15/M5/M1")
+                                tf_str = (
+                                    "W1/D1/H4" if t_style in ("D1_SWING", "D1", "DAILY") else (
+                                        "D1/H4/H1" if t_style in ("H4_SWING", "H4", "SWING") else (
+                                            "H1/M15/M5" if t_style in ("DAY_TRADING", "INTRADAY", "DAY") else "M15/M5/M1"
+                                        )
+                                    )
+                                )
 
                                 curr_price = d.entry_price
                                 if ctx and hasattr(ctx, "current_price") and ctx.current_price is not None:
@@ -739,6 +765,10 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
                         target_styles = {"DAY_TRADING", "DAY", "INTRADAY"}
                     elif s_norm in ("SCALP", "SCALPING"):
                         target_styles = {"SCALP", "SCALPING"}
+                    elif s_norm in ("H4", "H4_SWING", "H4_TRADING"):
+                        target_styles = {"H4_SWING", "H4", "H4_TRADING"}
+                    elif s_norm in ("D1", "D1_SWING", "DAILY", "D1_TRADING"):
+                        target_styles = {"D1_SWING", "D1", "DAILY", "D1_TRADING"}
                     elif s_norm == "SWING":
                         target_styles = {"SWING"}
                     else:

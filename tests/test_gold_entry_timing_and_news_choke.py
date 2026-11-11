@@ -152,7 +152,11 @@ class TestGoldEntryTimingAndNewsChoke(unittest.TestCase):
     def test_limit_order_runaway_drift_rejected_no_chase(self):
         """Verifies ExecutionEngine rejects drifted limit orders instead of chasing at market."""
         mt5_client = MagicMock()
-        exec_engine = ExecutionEngine(mt5_client=mt5_client)
+        state = MagicMock()
+        state.is_safe_mode = False
+        state.execution_mode = "demo"
+        state.account.equity = 100000.0
+        exec_engine = ExecutionEngine(mt5_client=mt5_client, state_manager=state)
 
         decision = MagicMock()
         decision.symbol = "XAUUSD"

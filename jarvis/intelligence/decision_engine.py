@@ -2173,17 +2173,58 @@ class DecisionEngine:
                 entry_price = round(context.structure.equilibrium_price, digits)
             else:
                 entry_price = round(cur_mkt_price + (0.35 * atr_val), digits)
+
+            # Style-calibrated limit distance cap to avoid detached limit entries
+            style_str = str(getattr(context, "trade_style", "SWING") or "SWING").upper()
+            sym_name = str(getattr(context, "symbol", "")).upper()
+            is_crypto_sym = any(c in sym_name for c in ["BTC", "ETH", "SOL", "CRYPTO"])
+            is_gold_sym = any(g in sym_name for g in ["GOLD", "XAU"])
+            is_index_sym = any(idx in sym_name for idx in ["US30", "NAS", "SPX", "GER", "JP225"])
+
+            if "SCALP" in style_str:
+                max_pullback_dist = min(0.50 * atr_val, cur_mkt_price * 0.005)
+            elif "DAY" in style_str:
+                max_pullback_dist = min(0.85 * atr_val, cur_mkt_price * 0.015)
+            else:
+                max_pullback_dist = min(1.25 * atr_val, cur_mkt_price * 0.030)
+            max_pullback_dist = max(max_pullback_dist, spread_dist * 4.0, float(pip_size) * 10)
+            entry_price = min(entry_price, round(cur_mkt_price + max_pullback_dist, digits))
+
+            # Clamping TP distance by asset class
+            if is_crypto_sym:
+                max_tp_pct = 0.20 if "SWING" in style_str else (0.10 if "DAY" in style_str else 0.05)
+            elif is_gold_sym:
+                max_tp_pct = 0.05 if "SWING" in style_str else (0.025 if "DAY" in style_str else 0.01)
+            elif is_index_sym:
+                max_tp_pct = 0.06 if "SWING" in style_str else (0.03 if "DAY" in style_str else 0.01)
+            else: # Forex
+                max_tp_pct = 0.035 if "SWING" in style_str else (0.018 if "DAY" in style_str else 0.008)
+
+            max_tp_dist = round(entry_price * max_tp_pct, digits)
+            tp_dist = min(tp_dist, max_tp_dist)
+            min_tp_floor = max(pip_size * 10, round(entry_price * (1.0 - max_tp_pct), digits))
+
             entry_delta = entry_price - getattr(context, "current_price", entry_price)
             sl_price = round(entry_price + risk_dist, digits)
             tp_price = round(entry_price - tp_dist, digits)
+            if tp_price <= min_tp_floor or tp_price >= entry_price:
+                tp_price = round(max(min_tp_floor, entry_price * 0.80), digits)
             if tp1_price is not None:
                 tp1_price = round(tp1_price + entry_delta, digits)
+                if tp1_price <= min_tp_floor or tp1_price >= entry_price:
+                    tp1_price = round(max(min_tp_floor, entry_price * 0.90), digits)
             if tp2_price is not None:
                 tp2_price = round(tp2_price + entry_delta, digits)
+                if tp2_price <= min_tp_floor or tp2_price >= entry_price:
+                    tp2_price = round(max(min_tp_floor, entry_price * 0.80), digits)
             if tp3_price is not None:
                 tp3_price = round(tp3_price + entry_delta, digits)
+                if tp3_price <= min_tp_floor or tp3_price >= entry_price:
+                    tp3_price = round(max(min_tp_floor, entry_price * 0.70), digits)
             if first_target_price is not None:
                 first_target_price = round(first_target_price + entry_delta, digits)
+                if first_target_price <= min_tp_floor or first_target_price >= entry_price:
+                    first_target_price = round(max(min_tp_floor, entry_price * 0.90), digits)
         elif is_chasing_premium_roof or (tentative_bias == "BUY" and is_reversal_or_pullback and not is_close_proximity):
             # Buy from the bottom: Route to LIMIT order placed at Discount / Bullish Order Block / FVG CE
             order_type_decision = "LIMIT"
@@ -2202,17 +2243,58 @@ class DecisionEngine:
                 entry_price = round(context.structure.equilibrium_price, digits)
             else:
                 entry_price = round(cur_mkt_price - (0.35 * atr_val), digits)
+
+            # Style-calibrated limit distance cap to avoid detached limit entries
+            style_str = str(getattr(context, "trade_style", "SWING") or "SWING").upper()
+            sym_name = str(getattr(context, "symbol", "")).upper()
+            is_crypto_sym = any(c in sym_name for c in ["BTC", "ETH", "SOL", "CRYPTO"])
+            is_gold_sym = any(g in sym_name for g in ["GOLD", "XAU"])
+            is_index_sym = any(idx in sym_name for idx in ["US30", "NAS", "SPX", "GER", "JP225"])
+
+            if "SCALP" in style_str:
+                max_pullback_dist = min(0.50 * atr_val, cur_mkt_price * 0.005)
+            elif "DAY" in style_str:
+                max_pullback_dist = min(0.85 * atr_val, cur_mkt_price * 0.015)
+            else:
+                max_pullback_dist = min(1.25 * atr_val, cur_mkt_price * 0.030)
+            max_pullback_dist = max(max_pullback_dist, spread_dist * 4.0, float(pip_size) * 10)
+            entry_price = max(entry_price, round(cur_mkt_price - max_pullback_dist, digits))
+
+            # Clamping TP distance by asset class
+            if is_crypto_sym:
+                max_tp_pct = 0.20 if "SWING" in style_str else (0.10 if "DAY" in style_str else 0.05)
+            elif is_gold_sym:
+                max_tp_pct = 0.05 if "SWING" in style_str else (0.025 if "DAY" in style_str else 0.01)
+            elif is_index_sym:
+                max_tp_pct = 0.06 if "SWING" in style_str else (0.03 if "DAY" in style_str else 0.01)
+            else: # Forex
+                max_tp_pct = 0.035 if "SWING" in style_str else (0.018 if "DAY" in style_str else 0.008)
+
+            max_tp_dist = round(entry_price * max_tp_pct, digits)
+            tp_dist = min(tp_dist, max_tp_dist)
+            max_tp_ceiling = round(entry_price * (1.0 + max_tp_pct), digits)
+
             entry_delta = entry_price - getattr(context, "current_price", entry_price)
             sl_price = round(entry_price - risk_dist, digits)
             tp_price = round(entry_price + tp_dist, digits)
+            if tp_price >= max_tp_ceiling or tp_price <= entry_price:
+                tp_price = round(min(max_tp_ceiling, entry_price * 1.20), digits)
             if tp1_price is not None:
                 tp1_price = round(tp1_price + entry_delta, digits)
+                if tp1_price >= max_tp_ceiling or tp1_price <= entry_price:
+                    tp1_price = round(min(max_tp_ceiling, entry_price * 1.10), digits)
             if tp2_price is not None:
                 tp2_price = round(tp2_price + entry_delta, digits)
+                if tp2_price >= max_tp_ceiling or tp2_price <= entry_price:
+                    tp2_price = round(min(max_tp_ceiling, entry_price * 1.20), digits)
             if tp3_price is not None:
                 tp3_price = round(tp3_price + entry_delta, digits)
+                if tp3_price >= max_tp_ceiling or tp3_price <= entry_price:
+                    tp3_price = round(min(max_tp_ceiling, entry_price * 1.30), digits)
             if first_target_price is not None:
                 first_target_price = round(first_target_price + entry_delta, digits)
+                if first_target_price >= max_tp_ceiling or first_target_price <= entry_price:
+                    first_target_price = round(min(max_tp_ceiling, entry_price * 1.10), digits)
         elif is_close_proximity:
             # Price is within close proximity (<= 0.25 ATR) of the structural level: execute at market
             order_type_decision = "MARKET"
@@ -2223,12 +2305,20 @@ class DecisionEngine:
                 entry_price = live_market_entry
                 sl_price = round(sl_price + entry_delta, digits)
                 tp_price = round(tp_price + entry_delta, digits)
+                if tp_price <= 0:
+                    tp_price = round(max(pip_size * 10, entry_price * 0.50), digits)
                 if tp1_price is not None:
                     tp1_price = round(tp1_price + entry_delta, digits)
+                    if tp1_price <= 0:
+                        tp1_price = round(max(pip_size * 10, entry_price * 0.75), digits)
                 if tp2_price is not None:
                     tp2_price = round(tp2_price + entry_delta, digits)
+                    if tp2_price <= 0:
+                        tp2_price = round(max(pip_size * 10, entry_price * 0.50), digits)
                 if tp3_price is not None:
                     tp3_price = round(tp3_price + entry_delta, digits)
+                    if tp3_price <= 0:
+                        tp3_price = round(max(pip_size * 10, entry_price * 0.25), digits)
                 tp_dist = abs(tp_price - entry_price)
         elif is_trending_momentum:
             # Anti-chase discipline: high momentum but price extended away from origin (> 0.25 ATR).
@@ -2250,6 +2340,57 @@ class DecisionEngine:
             )
             and (abs(getattr(context.momentum, "trend_score", 0.0)) >= 35.0 or getattr(context.momentum, "adx", 0.0) >= 24.0)
         )
+
+        # Missed-the-Boat Check: If market has already completed >= 40% of the journey towards TP
+        if order_type_decision == "LIMIT" and tp_dist > 0:
+            if tentative_bias == "SELL" and tp_price < cur_mkt_price < entry_price:
+                traversed_ratio = (entry_price - cur_mkt_price) / max(tp_dist, 1e-9)
+                if traversed_ratio >= 0.40:
+                    remaining_runway = cur_mkt_price - tp_price
+                    if remaining_runway >= (min_allowed_rr * risk_dist) and is_strong_trend_or_breakout:
+                        live_market_entry = round(context.bid if context.bid > 0 else cur_mkt_price, digits)
+                        entry_delta = live_market_entry - entry_price
+                        entry_price = live_market_entry
+                        sl_price = round(entry_price + risk_dist, digits)
+                        order_type_decision = "MARKET"
+                        logger.info(
+                            f"[{context.symbol}] SELL_LIMIT traversed {traversed_ratio*100:.1f}% towards TP. "
+                            f"Viable runway remaining ({remaining_runway / risk_dist:.2f}R). Converted to MARKET."
+                        )
+                    else:
+                        gate_passed = False
+                        gate_policy_decision = "BLOCK"
+                        decision_action = "NO_TRADE"
+                        rejection_reasons.append(
+                            f"Missed the boat: market has already completed {traversed_ratio*100:.1f}% of the expected drop towards TP. "
+                            f"Resting limit at origin rejected."
+                        )
+                        failing_reasons.append("MISSED_BOAT_NEAR_TP")
+                        logger.info(f"[{context.symbol}] SELL_LIMIT traversed {traversed_ratio*100:.1f}% towards TP. Resting limit blocked.")
+            elif tentative_bias == "BUY" and entry_price < cur_mkt_price < tp_price:
+                traversed_ratio = (cur_mkt_price - entry_price) / max(tp_dist, 1e-9)
+                if traversed_ratio >= 0.40:
+                    remaining_runway = tp_price - cur_mkt_price
+                    if remaining_runway >= (min_allowed_rr * risk_dist) and is_strong_trend_or_breakout:
+                        live_market_entry = round(context.ask if context.ask > 0 else cur_mkt_price, digits)
+                        entry_delta = live_market_entry - entry_price
+                        entry_price = live_market_entry
+                        sl_price = round(entry_price - risk_dist, digits)
+                        order_type_decision = "MARKET"
+                        logger.info(
+                            f"[{context.symbol}] BUY_LIMIT traversed {traversed_ratio*100:.1f}% towards TP. "
+                            f"Viable runway remaining ({remaining_runway / risk_dist:.2f}R). Converted to MARKET."
+                        )
+                    else:
+                        gate_passed = False
+                        gate_policy_decision = "BLOCK"
+                        decision_action = "NO_TRADE"
+                        rejection_reasons.append(
+                            f"Missed the boat: market has already completed {traversed_ratio*100:.1f}% of the expected rally towards TP. "
+                            f"Resting limit at origin rejected."
+                        )
+                        failing_reasons.append("MISSED_BOAT_NEAR_TP")
+                        logger.info(f"[{context.symbol}] BUY_LIMIT traversed {traversed_ratio*100:.1f}% towards TP. Resting limit blocked.")
         if threat_lvl is not None and isinstance(threat_lvl, (int, float)) and threat_lvl > 0:
             if tentative_bias == "BUY" and entry_price < threat_lvl <= tp_price:
                 potential_tp = round(threat_lvl - (atr_val * 0.1), digits)
@@ -2257,21 +2398,21 @@ class DecisionEngine:
                 if tuck_r >= min_allowed_rr:
                     tp_price = potential_tp
                     tp_dist = abs(tp_price - entry_price)
-                elif is_strong_trend_or_breakout:
-                    # In strong trend/breakout, treat barrier as TP1 milestone; maintain structural target for full runner
+                elif tuck_r >= 0.50:
+                    # Treat barrier as TP1 milestone; maintain structural target for full runner
                     tp1_price = potential_tp
                     tp2_price = tp_price
                     logger.info(
-                        f"[{context.symbol}] Strong trend breakout active: Adversarial barrier at {threat_lvl} designated as TP1 ({tuck_r:.2f}R); retaining structural TP2 at {tp_price}."
+                        f"[{context.symbol}] Adversarial barrier at {threat_lvl} designated as TP1 milestone ({tuck_r:.2f}R); retaining structural TP2 at {tp_price}."
                     )
                 else:
                     gate_passed = False
                     gate_policy_decision = "BLOCK"
                     decision_action = "NO_TRADE"
-                    failing_reasons.append(f"Adversarial Barrier Restricts Runway: {threat_lvl:.{digits}f} allows only {tuck_r:.2f}R (< {min_allowed_rr:.2f}R required)")
-                    rejection_reasons.append(f"Adversarial barrier at {threat_lvl:.{digits}f} leaves only {tuck_r:.2f}R runway (< {min_allowed_rr:.2f}R needed). Trade blocked to avoid collision.")
+                    failing_reasons.append(f"Adversarial Barrier Restricts Runway: {threat_lvl:.{digits}f} allows only {tuck_r:.2f}R (< 0.50R immediate obstacle)")
+                    rejection_reasons.append(f"Adversarial barrier at {threat_lvl:.{digits}f} leaves only {tuck_r:.2f}R runway (< 0.50R needed). Trade blocked to avoid collision.")
                     logger.info(
-                        f"[{context.symbol}] Adversarial threat level {threat_lvl} gives {tuck_r:.2f}R < {min_allowed_rr:.2f}R. "
+                        f"[{context.symbol}] Adversarial threat level {threat_lvl} gives {tuck_r:.2f}R < 0.50R. "
                         f"Blocking setup to prevent collision into dynamic obstacle."
                     )
             elif tentative_bias == "SELL" and tp_price <= threat_lvl < entry_price:
@@ -2280,21 +2421,21 @@ class DecisionEngine:
                 if tuck_r >= min_allowed_rr:
                     tp_price = potential_tp
                     tp_dist = abs(tp_price - entry_price)
-                elif is_strong_trend_or_breakout:
-                    # In strong trend/breakout, treat barrier as TP1 milestone; maintain structural target for full runner
+                elif tuck_r >= 0.50:
+                    # Treat barrier as TP1 milestone; maintain structural target for full runner
                     tp1_price = potential_tp
                     tp2_price = tp_price
                     logger.info(
-                        f"[{context.symbol}] Strong trend breakdown active: Adversarial barrier at {threat_lvl} designated as TP1 ({tuck_r:.2f}R); retaining structural TP2 at {tp_price}."
+                        f"[{context.symbol}] Adversarial barrier at {threat_lvl} designated as TP1 milestone ({tuck_r:.2f}R); retaining structural TP2 at {tp_price}."
                     )
                 else:
                     gate_passed = False
                     gate_policy_decision = "BLOCK"
                     decision_action = "NO_TRADE"
-                    failing_reasons.append(f"Adversarial Barrier Restricts Runway: {threat_lvl:.{digits}f} allows only {tuck_r:.2f}R (< {min_allowed_rr:.2f}R required)")
-                    rejection_reasons.append(f"Adversarial barrier at {threat_lvl:.{digits}f} leaves only {tuck_r:.2f}R runway (< {min_allowed_rr:.2f}R needed). Trade blocked to avoid collision.")
+                    failing_reasons.append(f"Adversarial Barrier Restricts Runway: {threat_lvl:.{digits}f} allows only {tuck_r:.2f}R (< 0.50R immediate obstacle)")
+                    rejection_reasons.append(f"Adversarial barrier at {threat_lvl:.{digits}f} leaves only {tuck_r:.2f}R runway (< 0.50R needed). Trade blocked to avoid collision.")
                     logger.info(
-                        f"[{context.symbol}] Adversarial threat level {threat_lvl} gives {tuck_r:.2f}R < {min_allowed_rr:.2f}R. "
+                        f"[{context.symbol}] Adversarial threat level {threat_lvl} gives {tuck_r:.2f}R < 0.50R. "
                         f"Blocking setup to prevent collision into dynamic obstacle."
                     )
 

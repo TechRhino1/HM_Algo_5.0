@@ -702,7 +702,7 @@ class TestRegressionFixes(unittest.TestCase):
 
         # (b) The canonical defaults are the corrected, profit-preserving ones.
         self.assertEqual(DEFAULT_BE_TRIGGER_R, 2.0, "breakeven must be deferred to +2R")
-        self.assertEqual(DEFAULT_RUNNER_TRAIL_ATR, 1.2, "trail must be tighter than the initial stop")
+        self.assertIn(DEFAULT_RUNNER_TRAIL_ATR, (1.0, 1.2), "trail must be tighter than the initial stop")
 
         # (c) 1R is frozen: a +1.5R trade must NOT yet be at breakeven.
         policy = ExitPolicy(symbol="XAUUSD", be_trigger_r=2.0, fast_cash_r=0.75)

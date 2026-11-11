@@ -262,11 +262,6 @@ class MT5Client:
                         "volume_step": float(getattr(sym_info, "volume_step", 0.01) or 0.01),
                     })
                     self._symbol_spec_cache[resolved] = (now_ts, dict(spec_dict))
-                    # Update mode based on actual account trade_mode
-                    if trade_mode == 0:
-                        self.mode = "demo"
-                    elif trade_mode == 2:
-                        self.mode = "live"
         except Exception as e:
             logger.warning(f"Failed to fetch MT5 symbol info for {resolved}: {e}")
         return spec_dict
@@ -868,6 +863,18 @@ class MT5Client:
             task_name=f"MT5_SendOrder_{symbol}",
         )
 
+    def get_broker_time(self) -> float:
+        """Returns the current broker server time in seconds, or time.time() as fallback."""
+        if self.mode != "paper" and MT5_AVAILABLE and self.is_connected and mt5 is not None:
+            try:
+                for cand in ("EURUSD#", "EURUSD", "GBPUSD#", "GBPUSD"):
+                    tick = mt5.symbol_info_tick(cand)
+                    if tick and getattr(tick, "time", 0) > 0:
+                        return float(tick.time)
+            except Exception:
+                pass
+        return time.time()
+
     def place_pending_order(
         self,
         symbol: str,
@@ -876,7 +883,8 @@ class MT5Client:
         volume: float,
         sl_price: float = 0.0,
         tp_price: float = 0.0,
-        comment: str = "JARVIS_LIMIT"
+        comment: str = "JARVIS_LIMIT",
+        expiration_sec: int = 0
     ) -> Dict[str, Any]:
         """Places a pending limit/stop order on MT5 (BUY_LIMIT, SELL_LIMIT, BUY_STOP, SELL_STOP)."""
         if self.mode not in {"live", "demo", "paper"}:
@@ -957,7 +965,20 @@ class MT5Client:
                     "type_filling": getattr(mt5, "ORDER_FILLING_IOC", 1)
                 }
 
+                if expiration_sec > 0:
+                    broker_now = self.get_broker_time()
+                    if broker_now > 0:
+                        request["type_time"] = getattr(mt5, "ORDER_TIME_SPECIFIED", 2)
+                        request["expiration"] = int(broker_now + expiration_sec)
+
                 result = mt5.order_send(request)
+                if result and result.retcode == 10022 and expiration_sec > 0:
+                    # Broker rejected ORDER_TIME_SPECIFIED (e.g. order_gtc_mode == 0). Fall back cleanly to GTC.
+                    logger.warning(f"Broker rejected ORDER_TIME_SPECIFIED for {resolved} (retcode 10022); falling back to GTC.")
+                    request["type_time"] = getattr(mt5, "ORDER_TIME_GTC", 0)
+                    request.pop("expiration", None)
+                    result = mt5.order_send(request)
+
                 if result and result.retcode in [10030, 10031]:
                     request["type_filling"] = getattr(mt5, "ORDER_FILLING_FOK", 0)
                     result = mt5.order_send(request)

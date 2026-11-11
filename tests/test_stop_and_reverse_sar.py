@@ -213,6 +213,7 @@ class TestStopAndReverseAndSellFromTop(unittest.TestCase):
             cand_dec.symbol = "XAUUSD"
             cand_dec.bias = "BUY"
             cand_dec.decision = "EXECUTE"
+            cand_dec.order_type = "MARKET"
             cand_dec.price = 2400.0
             cand_dec.entry_price = 2400.0
             cand_dec.stop_loss = 2392.0

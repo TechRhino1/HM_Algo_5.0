@@ -179,7 +179,10 @@ class DevilAdvocateAnalyst:
             if getattr(st, "dynamic_resistance_trendline", 0.0) > c_price:
                 candidate_res.append(st.dynamic_resistance_trendline)
             if hasattr(st, "key_levels") and st.key_levels:
-                res_levels = [kl["price"] for kl in st.key_levels if kl.get("price", 0) > c_price]
+                res_levels = [
+                    kl["price"] for kl in st.key_levels 
+                    if kl.get("price", 0) > c_price and (kl.get("touches", 1) >= 2 or kl.get("strength", 0) >= 60)
+                ]
                 candidate_res.extend(res_levels)
             if candidate_res:
                 threat_price_level = min(candidate_res)
@@ -201,7 +204,10 @@ class DevilAdvocateAnalyst:
             if 0 < getattr(st, "dynamic_support_trendline", 0.0) < c_price:
                 candidate_sup.append(st.dynamic_support_trendline)
             if hasattr(st, "key_levels") and st.key_levels:
-                sup_levels = [kl["price"] for kl in st.key_levels if 0 < kl.get("price", 0) < c_price]
+                sup_levels = [
+                    kl["price"] for kl in st.key_levels 
+                    if 0 < kl.get("price", 0) < c_price and (kl.get("touches", 1) >= 2 or kl.get("strength", 0) >= 60)
+                ]
                 candidate_sup.extend(sup_levels)
             if candidate_sup:
                 threat_price_level = max(candidate_sup)

@@ -66,8 +66,8 @@ class ActionResponseContractTest(unittest.TestCase):
         # Coherent levels for a BUY at 2000, so the route's own validation
         # passes and the broker layer is what decides the outcome.
         self.coherent = {
-            "symbol": "XAUUSD", "side": "BUY", "volume": 0.10,
-            "price": 2000.0, "sl": 1900.0, "tp": 2100.0,
+            "symbol": "XAUUSD", "side": "BUY", "volume": 0.01,
+            "price": 2000.0, "sl": 1996.0, "tp": 2010.0,
         }
 
     def test_a_rejected_market_order_answers_200_with_a_failed_status(self):
@@ -104,7 +104,7 @@ class ActionResponseContractTest(unittest.TestCase):
         }
         status, payload = _post("/api/action/place_pending_order", {
             "symbol": "XAUUSD", "order_type": "BUY_LIMIT",
-            "price": 1900.0, "volume": 0.10,
+            "price": 1900.0, "volume": 0.10, "sl": 1890.0,
         }, client)
 
         self.assertEqual(status, 200)
