@@ -2186,17 +2186,19 @@ class JarvisOrchestrator:
                         getattr(candidate.decision_obj, "order_type", "MARKET") in ("MARKET", "LIMIT")
                         or not isinstance(getattr(candidate.decision_obj, "order_type", None), str)
                     )
-                    and d_action not in ("WAIT", "HOLD", "NO_TRADE")
+                    and d_action not in ("HOLD", "NO_TRADE")
                     and (
                         d_action == "EXECUTE"
                         or (
-                            candidate.setup_grade in ("GRADE A+", "GRADE A")
+                            d_action == "WAIT"
+                            and candidate.setup_grade in ("GRADE A+", "GRADE A")
                             and candidate.expected_value >= 0.40
                             and candidate.risk_reward_ratio >= 1.4
                             and failing_cnt <= 1
                         )
                         or (
-                            candidate.setup_grade == "GRADE B"
+                            d_action == "WAIT"
+                            and candidate.setup_grade == "GRADE B"
                             and candidate.expected_value >= 0.40
                             and candidate.risk_reward_ratio >= 1.4
                             and failing_cnt == 0
@@ -2205,6 +2207,12 @@ class JarvisOrchestrator:
                 )
 
                 if not is_exec_ready:
+                    if candidate == ranked_candidates[0] or candidate.setup_grade in ("GRADE A+", "GRADE A"):
+                        logger.info(
+                            f"Arbiter selection {candidate.symbol} ({candidate.trade_style}) not exec-ready: "
+                            f"action={d_action}, actionable={candidate.is_actionable}, grade={candidate.setup_grade}, "
+                            f"failing_cnt={failing_cnt}, ev={candidate.expected_value:.2f}R, rr={candidate.risk_reward_ratio:.2f}"
+                        )
                     continue
 
                 decision = candidate.decision_obj

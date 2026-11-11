@@ -943,11 +943,11 @@ class DecisionEngine:
             (tentative_bias == "BUY" and getattr(context.structure, "choch_type", "") == "BEARISH")
         )
 
-        # Terminal Climax Anti-Exhaustion Gate: Never sell into oversold panic (RSI < 25) or buy into parabolic blowoff (RSI > 75)
+        # Terminal Climax Anti-Exhaustion Gate: Never sell into oversold panic or buy into parabolic blowoff
         is_exhausted = False
-        if tentative_bias == "SELL" and rsi_val < 25.0:
+        if tentative_bias == "SELL" and rsi_val < min(20.0, rsi_lower):
             is_exhausted = True
-        elif tentative_bias == "BUY" and rsi_val > 75.0:
+        elif tentative_bias == "BUY" and rsi_val > max(80.0, rsi_upper):
             is_exhausted = True
         elif tentative_bias == "BUY" and rsi_val > rsi_upper:
             if has_bear_div or has_counter_choch or not is_expansion_reg:
@@ -1839,20 +1839,34 @@ class DecisionEngine:
                 premium_discount_valid = False
         elif any(k in sym_name_eval for k in ["XAU", "GOLD", "XAG", "SILVER"]):
             # Institutional Precious Metals Discipline (ICT / SMC):
-            # Strict Discount for BUY, Strict Premium for SELL. Reject Equilibrium entries unless confirmed CHOCH.
+            # Strict Discount for BUY, Strict Premium for SELL.
+            # Trend continuation pullbacks (TREND_PULLBACK / TREND_FOLLOWING / BREAKOUT / strong trend)
+            # are fully valid in Equilibrium (45%-55% retracement) or with confirmed FVG/OB.
             has_bull_choch = getattr(st, "choch_type", "") == "BULLISH"
             has_bear_choch = getattr(st, "choch_type", "") == "BEARISH"
             rsi_val_eval = getattr(context.momentum, "rsi", 50.0) if hasattr(context, "momentum") else 50.0
+            is_trend_pullback = best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "BREAKOUT")
+            has_fvg_ob = bool(getattr(st, "fair_value_gaps", None) or getattr(st, "order_blocks", None))
+            strong_metals_trend = abs(trend_score_val) >= 50.0
+
             if tentative_bias == "BUY":
-                if st.discount_premium_zone != "DISCOUNT" and not has_bull_choch:
-                    premium_discount_valid = False
-                elif st.discount_premium_zone == "PREMIUM" or rsi_val_eval > 70.0:
-                    premium_discount_valid = False
+                if is_trend_pullback or strong_metals_trend or has_fvg_ob:
+                    if st.discount_premium_zone == "PREMIUM" or rsi_val_eval > 70.0:
+                        premium_discount_valid = False
+                else:
+                    if st.discount_premium_zone != "DISCOUNT" and not has_bull_choch:
+                        premium_discount_valid = False
+                    elif st.discount_premium_zone == "PREMIUM" or rsi_val_eval > 70.0:
+                        premium_discount_valid = False
             elif tentative_bias == "SELL":
-                if st.discount_premium_zone != "PREMIUM" and not has_bear_choch:
-                    premium_discount_valid = False
-                elif st.discount_premium_zone == "DISCOUNT" and rsi_val_eval < 30.0:
-                    premium_discount_valid = False
+                if is_trend_pullback or strong_metals_trend or has_fvg_ob:
+                    if st.discount_premium_zone == "DISCOUNT" and rsi_val_eval < 30.0:
+                        premium_discount_valid = False
+                else:
+                    if st.discount_premium_zone != "PREMIUM" and not has_bear_choch:
+                        premium_discount_valid = False
+                    elif st.discount_premium_zone == "DISCOUNT" and rsi_val_eval < 30.0:
+                        premium_discount_valid = False
         else:
             if tentative_bias == "BUY" and st.discount_premium_zone == "PREMIUM" and trend_score_val < 50:
                 if not bool(getattr(context.liquidity, "sweep_detected", False)):
@@ -2392,6 +2406,10 @@ class DecisionEngine:
                         failing_reasons.append("MISSED_BOAT_NEAR_TP")
                         logger.info(f"[{context.symbol}] BUY_LIMIT traversed {traversed_ratio*100:.1f}% towards TP. Resting limit blocked.")
         if threat_lvl is not None and isinstance(threat_lvl, (int, float)) and threat_lvl > 0:
+            is_trend_or_breakout = (
+                best_strategy in ("TREND_PULLBACK", "TREND_FOLLOWING", "BREAKOUT", "CHOCH_STRUCTURAL_REVERSAL")
+                or abs(trend_score_val) >= 40.0
+            )
             if tentative_bias == "BUY" and entry_price < threat_lvl <= tp_price:
                 potential_tp = round(threat_lvl - (atr_val * 0.1), digits)
                 tuck_r = (potential_tp - entry_price) / max(risk_dist, 1e-9)
@@ -2404,6 +2422,14 @@ class DecisionEngine:
                     tp2_price = tp_price
                     logger.info(
                         f"[{context.symbol}] Adversarial barrier at {threat_lvl} designated as TP1 milestone ({tuck_r:.2f}R); retaining structural TP2 at {tp_price}."
+                    )
+                elif is_trend_or_breakout:
+                    # In strong trend/pullback/breakout, minor obstacles do not block the structural runway; designate barrier as TP1 milestone
+                    tp1_price = max(round(entry_price + (atr_val * 0.2), digits), potential_tp)
+                    tp2_price = tp_price
+                    logger.info(
+                        f"[{context.symbol}] Trend/Breakout momentum ({best_strategy}) overriding immediate obstacle at {threat_lvl} ({tuck_r:.2f}R). "
+                        f"Maintaining structural TP2 {tp_price} with dynamic milestone."
                     )
                 else:
                     gate_passed = False
@@ -2427,6 +2453,14 @@ class DecisionEngine:
                     tp2_price = tp_price
                     logger.info(
                         f"[{context.symbol}] Adversarial barrier at {threat_lvl} designated as TP1 milestone ({tuck_r:.2f}R); retaining structural TP2 at {tp_price}."
+                    )
+                elif is_trend_or_breakout:
+                    # In strong trend/pullback/breakout, minor obstacles do not block the structural runway; designate barrier as TP1 milestone
+                    tp1_price = min(round(entry_price - (atr_val * 0.2), digits), potential_tp)
+                    tp2_price = tp_price
+                    logger.info(
+                        f"[{context.symbol}] Trend/Breakout momentum ({best_strategy}) overriding immediate obstacle at {threat_lvl} ({tuck_r:.2f}R). "
+                        f"Maintaining structural TP2 {tp_price} with dynamic milestone."
                     )
                 else:
                     gate_passed = False

@@ -56,9 +56,9 @@ GATE_SPECS: Tuple[GateSpec, ...] = (
     GateSpec("Master Confluence Minimum", "hard", category="confluence"),
     GateSpec("Commodity Macro Alignment", "hard", category="macro"),
     GateSpec("Macro MTF Alignment", "hard", category="macro"),
-    GateSpec("Trend Not Exhausted", "hard", category="trend"),
-    GateSpec("Premium/Discount Alignment", "hard", category="structure"),
     # ── Edge-quality gates (eligible for evidence-based softening) ──────────
+    GateSpec("Trend Not Exhausted", "soft", 0.03, "trend"),
+    GateSpec("Premium/Discount Alignment", "soft", 0.03, "structure"),
     GateSpec("Regime Trend Consistency", "soft", 0.04, "regime"),
     GateSpec("AI Multi-Score Gate", "soft", 0.04, "score"),
     GateSpec("Devil Adversarial Guard", "soft", 0.04, "adversarial"),

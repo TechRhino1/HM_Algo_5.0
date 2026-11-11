@@ -165,19 +165,18 @@ class DevilAdvocateAnalyst:
             invalidation_triggers.append("Bullish displacement breaking recent swing high.")
 
         # Concrete obstacle / threat price level detection across ALL symbols (§B-5)
-        # Checks supply/demand zones, key pivot levels, and dynamic trendline/channel boundaries
+        # Checks real structural supply/demand zones and confirmed multi-touch key pivot levels.
+        # Note: Dynamic indicator bands (channel bands, 2-pt trendlines) are used for penalty scoring
+        # but excluded from threat_price_level so they do not falsely restrict geometric trade runway.
         threat_price_level = None
         c_price = context.current_price
         atr_val = getattr(vol, "atr", 1.0) or 1.0
 
         if is_buy:
+            # 1. Structural resistance levels for runway & concrete barriers
             candidate_res = []
             if st.supply_zone[0] > c_price:
                 candidate_res.append(st.supply_zone[0])
-            if getattr(st, "channel_upper", 0.0) > c_price:
-                candidate_res.append(st.channel_upper)
-            if getattr(st, "dynamic_resistance_trendline", 0.0) > c_price:
-                candidate_res.append(st.dynamic_resistance_trendline)
             if hasattr(st, "key_levels") and st.key_levels:
                 res_levels = [
                     kl["price"] for kl in st.key_levels 
@@ -186,23 +185,23 @@ class DevilAdvocateAnalyst:
                 candidate_res.extend(res_levels)
             if candidate_res:
                 threat_price_level = min(candidate_res)
-                # Check for immediate ceiling collision (buying directly into overhead resistance/trendline)
                 dist_to_res = threat_price_level - c_price
                 if dist_to_res < (0.50 * atr_val):
                     col_penalty = 20.0 if dist_to_res < (0.15 * atr_val) else 12.0
                     penalty_score += col_penalty
                     threats.append(
-                        f"Immediate overhead resistance/trendline collision at {threat_price_level:.2f} "
-                        f"({dist_to_res:.1f} pts / {dist_to_res/max(atr_val,1e-6):.2f}R runway) — high rejection/reversal risk."
+                        f"Immediate overhead structural supply collision at {threat_price_level:.2f} "
+                        f"({dist_to_res:.1f} pts / {dist_to_res/max(atr_val,1e-6):.2f}R runway) — high rejection risk."
                     )
+            # 2. Dynamic channel boundary penalty (indicator-based warning only, not a hard barrier)
+            chan_up = getattr(st, "channel_upper", 0.0)
+            if chan_up > c_price and (chan_up - c_price) < (0.25 * atr_val):
+                penalty_score += 8.0
         else:
+            # 1. Structural support levels for runway & concrete barriers
             candidate_sup = []
             if 0 < st.demand_zone[1] < c_price:
                 candidate_sup.append(st.demand_zone[1])
-            if 0 < getattr(st, "channel_lower", 0.0) < c_price:
-                candidate_sup.append(st.channel_lower)
-            if 0 < getattr(st, "dynamic_support_trendline", 0.0) < c_price:
-                candidate_sup.append(st.dynamic_support_trendline)
             if hasattr(st, "key_levels") and st.key_levels:
                 sup_levels = [
                     kl["price"] for kl in st.key_levels 
@@ -211,15 +210,18 @@ class DevilAdvocateAnalyst:
                 candidate_sup.extend(sup_levels)
             if candidate_sup:
                 threat_price_level = max(candidate_sup)
-                # Check for immediate floor collision (selling directly into dynamic trendline support)
                 dist_to_sup = c_price - threat_price_level
                 if dist_to_sup < (0.50 * atr_val):
                     col_penalty = 20.0 if dist_to_sup < (0.15 * atr_val) else 12.0
                     penalty_score += col_penalty
                     threats.append(
-                        f"Immediate dynamic support/trendline collision at {threat_price_level:.2f} "
-                        f"({dist_to_sup:.1f} pts / {dist_to_sup/max(atr_val,1e-6):.2f}R runway) — high bounce/reversal risk."
+                        f"Immediate dynamic support zone collision at {threat_price_level:.2f} "
+                        f"({dist_to_sup:.1f} pts / {dist_to_sup/max(atr_val,1e-6):.2f}R runway) — high bounce risk."
                     )
+            # 2. Dynamic channel boundary penalty (indicator-based warning only, not a hard barrier)
+            chan_low = getattr(st, "channel_lower", 0.0)
+            if 0 < chan_low < c_price and (c_price - chan_low) < (0.25 * atr_val):
+                penalty_score += 8.0
 
         # Critique Confidence based on context quality & data completeness
         critique_conf = round(max(0.40, min(1.0, (context.context_quality / 100.0))), 2)
