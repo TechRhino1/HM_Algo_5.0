@@ -21,6 +21,10 @@ from unittest.mock import patch
 
 from jarvis.execution.exit_policy import ExitPolicy, evaluate_exit
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 
 def _policy(**overrides) -> ExitPolicy:
     base = dict(

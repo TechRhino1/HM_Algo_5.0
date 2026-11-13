@@ -4,6 +4,10 @@ from datetime import datetime
 from jarvis.data.schemas import PositionSnapshot
 from jarvis.execution.position_monitor import PositionMonitorEngine, JARVIS_MAGIC_NUMBER
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 class TestPositionMonitorManualClassification(unittest.TestCase):
     def setUp(self):
         self.mt5_client = MagicMock()

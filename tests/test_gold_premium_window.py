@@ -27,7 +27,8 @@ class TestGoldPremiumProfile(unittest.TestCase):
     def test_gold_profile_opt_in(self):
         gold = get_symbol_profile_config("XAUUSD")
         self.assertIsNotNone(gold)
-        self.assertTrue(gold.session_restriction)
+        # 24/5 since the 2026-11-14 fixed-target switch; the window is kept for reference.
+        self.assertFalse(gold.session_restriction)
         self.assertEqual(gold.allowed_utc_hours, (7, 18))
         self.assertTrue(gold.premium_window_exception)
         self.assertEqual(gold.premium_out_of_window_min_ai_score, 85.0)

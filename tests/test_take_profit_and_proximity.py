@@ -7,6 +7,10 @@ from jarvis.execution.exit_policy import ExitPolicy, evaluate_exit
 from jarvis.intelligence.dynamic_levels import DynamicRiskAndLevelsEngine
 from jarvis.data.symbol_registry import resolve
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 
 def test_exit_policy_relative_tp_progress_breakeven():
     """Verify that achieving 50% progress toward a sub-1.6R target triggers breakeven lock."""

@@ -1070,7 +1070,7 @@ class PositionMonitorEngine:
                 if first_target is None:
                     first_target = (pos.open_price + (risk_dist_init * p_trigger_r)) if pos.type == "BUY" else (pos.open_price - (risk_dist_init * p_trigger_r))
 
-                is_target_hit = (c_price >= first_target) if pos.type == "BUY" else (c_price <= first_target)
+                is_target_hit = getattr(_p, "profit_locks", True) and ((c_price >= first_target) if pos.type == "BUY" else (c_price <= first_target))
                 if is_target_hit:
                     spec = self.mt5_client.get_symbol_trading_spec(pos.symbol) if hasattr(self.mt5_client, "get_symbol_trading_spec") else {}
                     vol_min = spec.get("volume_min", 0.01) if isinstance(spec, dict) else 0.01

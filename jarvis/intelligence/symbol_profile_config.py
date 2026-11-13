@@ -64,6 +64,12 @@ class SymbolProfileConfig:
     # the off-session chop filtered. In-window behavior is unchanged.
     premium_window_exception: bool = False
     premium_out_of_window_min_ai_score: float = 0.0
+
+    # Fixed-target exit: take profit at exactly N x the stop distance and let the
+    # trade run to it or to the stop - no breakeven, partial, trail, milestone or
+    # progress locks. None keeps the managed exit. (Gold backtest 2026-11-14,
+    # May-Nov H1, 24h: PF 0.62 managed -> 1.16 at 2.5R.)
+    fixed_target_r: Optional[float] = None
     
     # XM Ultra Low Standard Account Specifications
     contract_size: float = 1.0
@@ -470,7 +476,10 @@ SYMBOL_PROFILES: Dict[str, SymbolProfileConfig] = {
         fast_cash_volume_pct=0.50,
         be_trigger_r=1.20,                     # Move to breakeven quickly at 1.20R
         runner_trail_atr=2.00,
-        session_restriction=True,
+        fixed_target_r=2.5,
+        # 24/5 since 2026-11-14: the fixed-target backtest was stronger around the
+        # clock (2R: +$375 24h vs +$130 in-window). Hours kept for reference.
+        session_restriction=False,
         # Prime trading window: London + NY (07:00 to 18:00 UTC)
         # Filters low-liquidity overnight chop while keeping elite setups via premium exception
         allowed_utc_hours=(7, 18),

@@ -46,6 +46,10 @@ from jarvis.risk.risk_engine import RiskEngine
 from jarvis.application.orchestrator import JarvisOrchestrator
 from jarvis.intelligence.regime_engine import MarketRegimeClassifier
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 class TestRegressionFixes(unittest.TestCase):
     def test_a1_log_trade_timezone_iso(self):
         """A1: Verify log_trade writes row with valid ISO timestamp and no NameError."""

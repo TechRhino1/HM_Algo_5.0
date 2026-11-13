@@ -23,6 +23,10 @@ from jarvis.intelligence.institutional_entry_engine import InstitutionalEntryEng
 from jarvis.intelligence.dynamic_levels import DynamicRiskAndLevelsEngine
 from jarvis.execution.position_monitor import PositionMonitorEngine, JARVIS_MAGIC_NUMBER
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 
 def make_sample_ohlcv(start_price=2400.0, num_bars=50, trend=1.0, step=0.5):
     """Generates synthetic OHLCV dataframe for MTF testing."""

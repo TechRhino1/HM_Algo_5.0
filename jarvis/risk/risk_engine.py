@@ -121,6 +121,11 @@ class RiskEngine:
         """
         self._now = clock if clock is not None else time.time
         self.circuit_breaker.set_clock(clock)
+        # The daily-loss cap rolls over on the guard's "today"; without bar time a
+        # backtest stayed on one wall-clock day and halted for good after one bad day.
+        self.drawdown_guard.set_clock(
+            None if clock is None else (lambda: datetime.fromtimestamp(clock(), timezone.utc))
+        )
 
     # ─── Atomic Risk Reservation (Thread-Safe Execution) ───────────────────────
 

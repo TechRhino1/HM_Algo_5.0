@@ -20,6 +20,10 @@ from jarvis.execution.position_monitor import PositionMonitorEngine
 from jarvis.api.server import JarvisRequestHandler
 from tests.test_ai_smart_tp_sl_milestones import _build_test_context
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 
 class _RouteHarness(JarvisRequestHandler):
     """Drives real do_POST handler in-memory without a network socket."""

@@ -55,3 +55,60 @@ def test_a_locked_out_user_cannot_log_in_even_with_the_right_password():
     finally:
         RemoteAuthEngine._users = saved_users
         RemoteAuthEngine._failed_attempts = saved_fail
+
+
+def test_backtest_bar_clock_rolls_the_daily_loss_day_over():
+    from datetime import datetime, timezone
+    from jarvis.risk.risk_engine import RiskEngine
+
+    engine = RiskEngine(is_backtest=True)
+    day1 = datetime(2026, 7, 8, 15, tzinfo=timezone.utc).timestamp()
+    day2 = datetime(2026, 7, 9, 15, tzinfo=timezone.utc).timestamp()
+    engine.set_clock(lambda: day1)
+    assert engine.drawdown_guard._today() == "2026-07-08"
+    engine.set_clock(lambda: day2)
+    assert engine.drawdown_guard._today() == "2026-07-09"
+
+
+def test_gold_exit_runs_to_a_fixed_target_without_profit_locks():
+    from jarvis.execution.exit_policy import ExitPolicy, evaluate_exit
+
+    gold = ExitPolicy.for_symbol("XAUUSD", None, trade_style="SWING")
+    assert gold.profit_locks is False and gold.milestones == []
+    # +1.6R of a 2.5R target used to trip breakeven, partials and progress locks.
+    dec = evaluate_exit(
+        side="BUY", entry=4000.0, initial_sl=3982.0, current_sl=3982.0, tp=4045.0,
+        price=4028.8, favorable_dist=28.8, atr=20.0, policy=gold,
+    )
+    assert dec.new_sl in (0.0, 3982.0) and dec.partial_close_pct == 0.0 and not dec.be_locked
+    # Other symbols keep the managed exit.
+    assert ExitPolicy.for_symbol("EURUSD", None, trade_style="SWING").profit_locks is True
+
+
+def test_gold_order_take_profit_is_two_and_a_half_times_the_stop():
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock
+    from jarvis.execution.execution_engine import ExecutionEngine
+    from jarvis.data.schemas import DecisionObject, TradeQualityGateResult, RegimeOutput, MarketRegime
+
+    mt5 = MagicMock()
+    mt5.is_connected = True
+    mt5.get_pending_orders.return_value = []
+    mt5.place_pending_order.return_value = {"status": "PLACED", "ticket": 1, "price": 3984.94}
+    state = MagicMock(is_safe_mode=False, is_circuit_broken=False, is_drawdown_limit_reached=False)
+    state.account.equity = 10000.0
+    state.get_market_context.return_value = None
+    regime = RegimeOutput(primary_regime=MarketRegime.TREND_BEAR, probabilities={"TREND_BEAR": 0.9}, confidence=0.9)
+    decision = DecisionObject(
+        symbol="XAUUSD", timestamp=datetime.now(timezone.utc), regime=regime, bias="SELL",
+        probabilities={"SELL": 0.8}, strategy="TREND_PULLBACK", entry_price=3984.94,
+        stop_loss=4002.94, take_profit=3913.14, risk_reward_ratio=3.99, calculated_risk_percent=0.5,
+        expected_value=1.0, model_confidence=0.6, adversarial_penalty=0.0, invalidation_levels=[],
+        bull_case=[], bear_case=[], risk_factors=[], quality_gate=TradeQualityGateResult(passed=True, checks={}),
+        decision="EXECUTE", execution_authorized=True, order_type="LIMIT", ai_score=90.0,
+    )
+    with patch("jarvis.data.database.TRADE_DB.log_trade"):
+        ExecutionEngine(mt5_client=mt5, state_manager=state).execute_decision(decision, lots=0.01)
+    reward, risk = decision.entry_price - decision.take_profit, decision.stop_loss - decision.entry_price
+    assert abs(reward / risk - 2.5) < 0.01  # tick rounding only
+    assert decision.risk_reward_ratio == 2.5

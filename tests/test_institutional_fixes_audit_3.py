@@ -27,6 +27,10 @@ from jarvis.data.schemas import (
 )
 from jarvis.data.symbol_registry import resolve
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 
 def test_issue_1_proximity_harvesting_guard():
     """Verify _should_harvest_proximity prevents premature harvest and clips below 1.15R."""

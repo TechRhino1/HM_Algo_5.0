@@ -107,6 +107,9 @@ class ExitPolicy:
     time_stop_min_r: float = DEFAULT_TIME_STOP_MIN_R
     digits: int = 5
     pip_size: float = 0.0001
+    # False for fixed-target symbols: skips the short-target breakeven and the
+    # progress-to-TP ratchets, which apply regardless of the R levels above.
+    profit_locks: bool = True
 
     # ── Construction ────────────────────────────────────────────────────────
     @classmethod
@@ -168,6 +171,13 @@ class ExitPolicy:
                 # High volatility: tighten fast-cash profit lock once in money
                 fast_cash_r = min(fast_cash_r, 1.10)
 
+            fixed_target = getattr(cfg, "fixed_target_r", None)
+            if fixed_target:
+                # Run to the fixed target or the stop; only the default time stop remains.
+                be_trig = fast_cash_r = trail_act = 1e9
+                milestones = []
+                time_stop_min = DEFAULT_TIME_STOP_MINUTES
+
             pol = cls(
                 symbol=str(symbol),
                 trade_style=sp.trade_style,
@@ -183,6 +193,7 @@ class ExitPolicy:
                 time_stop_minutes=time_stop_min,
                 digits=int(getattr(cfg, "digits", digits) or digits),
                 pip_size=float(getattr(cfg, "pip_size", pip_size) or pip_size),
+                profit_locks=not fixed_target,
             )
             _RESOLVED_POLICY_CACHE[cache_key] = pol
             return pol
@@ -375,7 +386,7 @@ def evaluate_exit(
     # Breakeven lock triggers when dedicated be_trigger_r is reached, OR on >= 50%
     # progress toward TP for scalps / sub-1.65R structural targets with >= +0.45R excursion.
     is_short_horizon_target = 0.0 < target_r <= 1.65
-    be_by_tp = (is_short_horizon_target and progress_tp >= 0.50 and r_multiple >= 0.45)
+    be_by_tp = policy.profit_locks and (is_short_horizon_target and progress_tp >= 0.50 and r_multiple >= 0.45)
     be_triggered = be_already_locked or (r_multiple >= policy.be_trigger_r) or be_by_tp
     if not be_already_locked:
         if r_multiple >= policy.be_trigger_r:
@@ -432,7 +443,7 @@ def evaluate_exit(
     # ── 3.5 Progress-to-TP Ratchets (Institutional Target Proximity Protection) ─
     # Institutional rule (SKILL.md §8): Never let a trade reaching >= 65-80% of
     # its target turn into a loss, even on sub-1.5R scalps or structural fades.
-    if tp_dist > 1e-6 and progress_tp >= 0.65:
+    if policy.profit_locks and tp_dist > 1e-6 and progress_tp >= 0.65:
         progress_milestones = [(0.65, 0.25), (0.80, 0.55), (0.90, 0.75), (0.94, 0.82)]
         for prog_thresh, lock_pct in progress_milestones:
             if progress_tp >= prog_thresh:

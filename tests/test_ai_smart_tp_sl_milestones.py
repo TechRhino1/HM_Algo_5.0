@@ -26,6 +26,10 @@ from jarvis.intelligence.decision_engine import DecisionEngine, LevelsResult
 from jarvis.execution.position_monitor import PositionMonitorEngine
 from jarvis.application.state_manager import StateManager
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 
 def _build_test_context(symbol: str = "XAUUSD", current_price: float = 2400.0, bias: str = "BULLISH") -> MarketContext:
     return MarketContext(

@@ -22,6 +22,10 @@ from jarvis.data.schemas import (
     RegimeOutput, MarketRegime, PositionSnapshot
 )
 
+import pytest as _pytest
+# Gold is the sample symbol for the managed-exit mechanics tested here.
+pytestmark = _pytest.mark.usefixtures("managed_gold_exit")
+
 
 class TestDynamicStyleAndLevels(unittest.TestCase):
     def setUp(self):

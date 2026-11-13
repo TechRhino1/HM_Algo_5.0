@@ -114,3 +114,18 @@ def _hermetic_trade_journal(monkeypatch):
                 os.remove(path + suffix)
             except OSError:
                 pass
+
+
+@pytest.fixture
+def managed_gold_exit(monkeypatch):
+    """Gold with the managed exit (BE / partial / milestones / locks) it had before
+    the 2026-11-14 fixed-target switch. Tests that use gold as the sample symbol for
+    those mechanics opt in; every other symbol still runs them in production."""
+    from jarvis.execution import exit_policy
+    from jarvis.intelligence.symbol_profile_config import SYMBOL_PROFILES
+
+    monkeypatch.setattr(SYMBOL_PROFILES["XAUUSD"], "fixed_target_r", None)
+    exit_policy._RESOLVED_POLICY_CACHE.clear()
+    yield
+    exit_policy._RESOLVED_POLICY_CACHE.clear()
+
