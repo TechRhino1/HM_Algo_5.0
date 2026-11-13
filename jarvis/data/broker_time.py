@@ -136,6 +136,45 @@ def _derive_offset(mt5_module, symbols: Iterable[str], clock: float) -> Optional
     return int(snapped)
 
 
+# The broker's wall clock for BAR timestamps. Measured on XMGlobal-MT5 (2026-11-14):
+# weekly opens sit at a fixed broker hour except in the week between the EU and US
+# DST changes, i.e. the server follows the EU calendar (UTC+3 summer / UTC+2 winter).
+BROKER_TZ = "Europe/Athens"
+
+
+def broker_bar_times_to_utc(times, live_offset_sec: Optional[float] = None):
+    """Convert MT5 bar times (broker wall clock) to a tz-aware UTC Series.
+
+    Accepts MT5 epoch seconds or datetimes that carry the broker wall clock
+    (naive, or mislabelled as UTC as the old lake files are). Per-bar DST comes
+    from BROKER_TZ, so a 95-day history spanning a DST change is right on both
+    sides. If the live measured offset disagrees with BROKER_TZ, the server is
+    on another clock and its measured offset is applied instead.
+    """
+    import numpy as np
+    import pandas as pd
+
+    s = pd.Series(times)
+    if pd.api.types.is_numeric_dtype(s):
+        wall = pd.to_datetime(s, unit="s")
+    else:
+        wall = pd.to_datetime(s)
+        if wall.dt.tz is not None:
+            wall = wall.dt.tz_convert("UTC").dt.tz_localize(None)
+
+    off = int(live_offset_sec or 0)  # 0 = offset unknown -> trust the measured calendar
+    if off:
+        cal_off = int(pd.Timestamp.now(tz=BROKER_TZ).utcoffset().total_seconds())
+        if off != cal_off:
+            # shortcut: a non-EET server gets one constant offset for every bar; give it its own tz if it has DST.
+            return (wall - pd.Timedelta(seconds=off)).dt.tz_localize("UTC")
+
+    # Ambiguous hour (EU fall-back Sunday) -> standard time; skipped hour -> next valid one.
+    local = wall.dt.tz_localize(BROKER_TZ, ambiguous=np.zeros(len(wall), dtype=bool),
+                                nonexistent="shift_forward")
+    return local.dt.tz_convert("UTC")
+
+
 def broker_utc_offset(mt5_module=None, symbols: Iterable[str] = (), now: Optional[float] = None) -> int:
     """Seconds the broker's server clock is AHEAD of real UTC.
 

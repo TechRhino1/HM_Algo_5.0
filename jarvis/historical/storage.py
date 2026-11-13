@@ -196,6 +196,9 @@ class StorageEngine:
                 "checksum_sha256": checksum,
                 "quality_score": quality_score,
                 "schema_version": "1.0",
+                # Files written before 2026-11-14 hold the broker's wall clock labelled UTC;
+                # read_dataset converts any file without this marker.
+                "time_basis": "utc",
                 "version": version,
                 "file_path": final_parquet_path,
                 "extra": extra_metadata or {}
@@ -265,7 +268,22 @@ class StorageEngine:
             filters=pyarrow_filter
         )
         df = table.to_pandas()
+        if not df.empty and "time" in df.columns and not self._is_utc_basis(parquet_path):
+            from jarvis.data.broker_time import broker_bar_times_to_utc
+
+            # shortcut: legacy files are filtered above on their broker-clock labels, so a
+            # start/end window can be off by 2-3h at its edges until the dataset is re-written.
+            df["time"] = broker_bar_times_to_utc(df["time"])
         return df
+
+    def _is_utc_basis(self, parquet_path: str) -> bool:
+        dataset_id = os.path.splitext(os.path.basename(parquet_path))[0]
+        manifest_file = os.path.join(self.manifests_dir, f"{dataset_id}.manifest.json")
+        try:
+            with open(manifest_file, "r", encoding="utf-8") as mf:
+                return json.load(mf).get("time_basis") == "utc"
+        except (OSError, ValueError):
+            return False
 
     def save_raw_backup(
         self, broker_server: str, symbol: str, timeframe: str, raw_data_bytes: bytes, suffix: str = ".bin"

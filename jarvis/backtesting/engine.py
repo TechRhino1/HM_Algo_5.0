@@ -24,6 +24,18 @@ from jarvis.execution.entry_policy import evaluate_entry
 from jarvis.market.data_feed import style_timeframes, normalise_style
 
 
+def _mean_r_multiple(trades: List[Dict[str, Any]], spec: Any = None) -> float:
+    """Mean |R| of closed trades, 1R = |entry - initial_sl| (the trailed `sl` would shrink 1R)."""
+    rs = []
+    for t in trades:
+        risk = abs(float(t.get("entry", 0.0)) - float(t.get("initial_sl", t.get("sl", 0.0)) or 0.0))
+        if risk <= 0:
+            risk = abs(float(t.get("risk_dist", 0.0) or 0.0))
+        if risk > 0:
+            rs.append(abs(float(t.get("exit", 0.0)) - float(t.get("entry", 0.0))) / risk)
+    return float(np.mean(rs)) if rs else 0.0
+
+
 class BacktestEngine:
     def __init__(
         self,
@@ -524,7 +536,7 @@ class BacktestEngine:
                 # 5.1a Stop hit (conservative: low <= SL for BUY, high >= SL for SELL)
                 if (low <= open_trade["sl"]) if open_trade["type"] == "BUY" else (high >= open_trade["sl"]):
                     exit_price = open_trade["sl"]
-                    if open_trade["be_locked"] or open_trade.get("partial_closed", False):
+                    if open_trade.get("be_locked", False) or open_trade.get("partial_closed", False):
                         result = "BE/TRAIL_SL"
                     else:
                         result = "SL"

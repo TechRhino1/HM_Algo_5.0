@@ -562,8 +562,11 @@ class MT5HistoryFetcher:
             )
 
         df = pd.DataFrame(rates)
-        df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
-        lo = pd.Timestamp(start_dt).tz_convert("UTC") if pd.Timestamp(start_dt).tzinfo else pd.Timestamp(start_dt, tz="UTC")
+        # MT5 bar times are the broker's wall clock (2-3h ahead); labelling them UTC put
+        # backtest session gates on the wrong hours and the `<= now` filter dropped the newest bars.
+        from jarvis.data.broker_time import broker_bar_times_to_utc, broker_utc_offset
+        df["time"] = broker_bar_times_to_utc(df["time"], broker_utc_offset(mt5_module=mt5, symbols=[broker]))
+        lo =pd.Timestamp(start_dt).tz_convert("UTC") if pd.Timestamp(start_dt).tzinfo else pd.Timestamp(start_dt, tz="UTC")
         hi = pd.Timestamp(end_dt).tz_convert("UTC") if pd.Timestamp(end_dt).tzinfo else pd.Timestamp(end_dt, tz="UTC")
         df = df[(df["time"] >= lo) & (df["time"] <= hi)].copy()
 

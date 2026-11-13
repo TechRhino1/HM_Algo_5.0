@@ -239,7 +239,10 @@ class AcquisitionEngine:
 
             if rates is not None and len(rates) > 0:
                 df = pd.DataFrame(rates)
-                df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
+                from jarvis.data.broker_time import broker_bar_times_to_utc, broker_utc_offset
+
+                # Broker wall clock -> true UTC (see jarvis.data.broker_time.BROKER_TZ).
+                df["time"] = broker_bar_times_to_utc(df["time"], broker_utc_offset(mt5_module=mt5, symbols=[resolved]))
                 # Filter strictly within [start_dt, end_dt]
                 ts_s = pd.to_datetime(start_dt, utc=True)
                 ts_e = pd.to_datetime(end_dt, utc=True)

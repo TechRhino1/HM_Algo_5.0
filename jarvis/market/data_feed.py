@@ -5,7 +5,7 @@ Provides thread-safe, timeout-guarded OHLCV data streaming from MT5 with realist
 import time
 
 from jarvis.data.broker_symbols import resolve_broker_symbol, ensure_mt5_terminal
-from jarvis.data.broker_time import broker_utc_offset
+from jarvis.data.broker_time import broker_bar_times_to_utc, broker_utc_offset
 # One bar-duration map for the whole codebase. The provider already owned the
 # canonical copy; duplicating it here is how a second source of truth starts.
 from jarvis.data.tradingview_provider import TF_SECONDS_MAP
@@ -472,7 +472,10 @@ class DataFeedEngine:
                 broker actually answered for, which is the only one whose tick
                 offset is valid."""
                 d = pd.DataFrame(rates)
-                d["time"] = pd.to_datetime(d["time"], unit="s")
+                off = broker_utc_offset(mt5_module=mt5, symbols=[_broker_sym])
+                # Bar labels must be true UTC: every session/killzone gate reads them as UTC,
+                # and the broker clock is 2-3h ahead. Kept naive so consumers' dtypes don't change.
+                d["time"] = broker_bar_times_to_utc(d["time"], off).dt.tz_localize(None).to_numpy()
                 d.rename(columns={"tick_volume": "volume"}, inplace=True)
                 cols = ["time", "open", "high", "low", "close", "volume"]
                 if "spread" in d.columns:
@@ -489,7 +492,6 @@ class DataFeedEngine:
                     cols.append("spread")
                 out = d[cols].copy()
                 out.attrs["data_source"] = "LIVE_MT5"
-                off = broker_utc_offset(mt5_module=mt5, symbols=[_broker_sym])
                 v, a = classify_bar_freshness(
                     float(rates["time"][-1]),
                     timeframe,
