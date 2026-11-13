@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/static/css/theme_bugatti.css?v=20261030_v2">
 <!-- Mobile v3 "Aurora" iOS design system (small screens only; loaded last) -->
 <link rel="stylesheet" href="/static/css/hm_ios_v3.css?v=20261030_v2">
+<link rel="stylesheet" href="/static/css/hm_enhance.css?v=20261114">
 
 <!--
   DYNAMIC-DATA CONTRACT
@@ -656,6 +657,7 @@
             Pending <span class="tt-pos-tab__count" id="pos-tab-count-pending">0</span>
           </button>
         </div>
+        <input type="search" class="tt-input hm-filter" id="pos-filter" data-hm-filter="pos-body" placeholder="Filter symbol…" aria-label="Filter positions by symbol or text" autocomplete="off">
         <span class="tt-panel__spacer"></span>
         <span class="tt-pos-total"><span class="tt-num tt-muted" id="pos-total">—</span></span>
         <button class="tt-btn tt-btn--danger tt-btn--sm" id="flatten-all">Flatten all</button>
@@ -1741,5 +1743,6 @@
 <script src="/static/js/dashboard.js?v=20261030_v2"></script>
 <script src="/static/js/hm_mobile_nav.js?v=20261030_v2"></script>
 <script src="/static/js/hm_mobile_ux.js?v=20261030_v2"></script>
+<script src="/static/js/hm_enhance.js?v=20261114"></script>
 </body>
 </html>

@@ -1,0 +1,102 @@
+/* HM Algo dashboard enhancements (pairs with js/hm_enhance.js). Loaded last. */
+
+/* ── Sortable headers ───────────────────────────────────────────────── */
+.hm-sort-btn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  border-radius: 4px;
+}
+th.tt-num .hm-sort-btn { flex-direction: row-reverse; }
+.hm-sort-btn::after {
+  content: '↕';
+  font-size: 0.85em;
+  opacity: 0.3;
+}
+.hm-sort-btn[data-dir="asc"]::after { content: '▲'; opacity: 0.9; color: var(--hm-accent, #38bdf8); }
+.hm-sort-btn[data-dir="desc"]::after { content: '▼'; opacity: 0.9; color: var(--hm-accent, #38bdf8); }
+.hm-sort-btn:hover { color: var(--hm-text, #e6edf7); }
+.hm-sort-btn:focus-visible { outline: 2px solid var(--hm-accent, #38bdf8); outline-offset: 2px; }
+
+/* ── Row filter ─────────────────────────────────────────────────────── */
+.hm-filtered-out { display: none !important; }
+.hm-filter {
+  width: 9.5rem;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 0.75rem;
+}
+
+/* Visible keyboard focus on row actions and tabs (several themes strip it). */
+.tt-pos-tab:focus-visible,
+.tt-table button:focus-visible {
+  outline: 2px solid var(--hm-accent, #38bdf8) !important;
+  outline-offset: 2px;
+}
+
+/* ── Phones: account vitals back at a glance, filter full width ─────── */
+@media (max-width: 599px) {
+  /* hm_ios_v3.css moved the strip into the Tools drawer; equity and P&L are
+     the numbers checked on every visit, so show a compact 4-up row. */
+  .tt-rail #account-strip {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-column: 1 / -1;
+    width: 100%;
+    margin: 4px 0 0;
+    padding: 6px 4px;
+  }
+  .tt-rail #account-strip .tt-metric--account { display: none !important; }
+  .tt-rail #account-strip .tt-metric { text-align: center; }
+
+  .tt-panel__head--pos { flex-wrap: wrap; row-gap: 6px; }
+  .tt-panel__head--pos .hm-filter { order: 10; flex: 1 1 100%; width: auto; height: 36px; font-size: 0.875rem; }
+  .hm-sort-btn { min-height: 32px; }
+}
+
+/* ── Tablet sidebar layout (600-1024px, ios_mobile.css §4) ──────────── */
+@media (min-width: 600px) and (max-width: 1024px) {
+  /* The desktop spacer is flex:1 in the vertical rail and pushed the brand
+     and nav halfway down the sidebar. */
+  .tt-rail > .tt-rail__spacer { display: none; }
+}
+@media (min-width: 600px) and (max-width: 899px) {
+  /* Two ~250px columns left the chart unreadable: stack chart over watchlist. */
+  #view-trade { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: none !important; }
+  .tt-main { overflow-y: auto !important; }
+  #view-trade { height: auto !important; min-height: 0 !important; grid-auto-rows: auto !important; align-self: start !important; }
+  #view-trade > .tt-panel--chart { order: -1; min-height: 720px; }
+  #view-trade > .tt-panel--watchlist { height: 60vh; min-height: 420px; }
+}
+
+@media (max-width: 899px) {
+  /* Watchlist cards: one compact row of label-over-value cells instead of a
+     5-line card, so ~3x more symbols fit on screen. */
+  #watch-table[data-hm-cards] tbody tr {
+    display: grid !important;
+    grid-template-columns: 1.1fr 0.8fr 1.4fr 0.8fr 0.9fr;
+    column-gap: 4px;
+    row-gap: 2px;
+    padding: 8px 12px !important;
+  }
+  #watch-table[data-hm-cards] tbody td[data-primary] { grid-column: 1 / -1; padding: 0 0 4px !important; border: 0 !important; }
+  #watch-table[data-hm-cards] tbody td:not([data-primary]) {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    gap: 1px;
+    min-width: 0;
+    padding: 0 !important;
+    border: 0 !important;
+    white-space: nowrap;
+    font-size: 0.8125rem;
+  }
+  #watch-table[data-hm-cards] tbody td:not([data-primary])::before { font-size: 0.5625rem; margin: 0 !important; }
+}

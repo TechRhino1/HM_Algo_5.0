@@ -1420,6 +1420,8 @@
     var rows = state.history || [];
     var total = rows.length;
     setText($('pos-tab-count-history'), String(total));
+    // Loaders call this on every /api/history poll; only the History tab owns #pos-body then.
+    if (state.posTab !== 'history') return;
 
     var histPag = $('pos-hist-pagination');
 
@@ -1490,6 +1492,7 @@
     var body = $('pos-body');
     var list = state.posPending || [];
     setText($('pos-tab-count-pending'), String(list.length));
+    if (state.posTab !== 'pending') return; // count stays fresh; body belongs to the active tab
 
     if (!list.length) {
       setState(body, 'empty', 'No working orders', 'Place a limit or stop from the ticket and it shows up here.');
@@ -1554,7 +1557,10 @@
      pattern are shared with the classic terminal. */
   function cancelPendingFromPanel(ticket) {
     if (!ticket) return;
-    if (!window.confirm('Cancel working order #' + ticket + '?')) return;
+    var o = (state.posPending || []).filter(function (x) { return x.ticket === ticket; })[0];
+    showCockpitConfirm('Cancel order #' + ticket,
+      'Cancel ' + (o ? pendingTypeNameLocal(o.type) + ' ' + num(o.volume, 2) + ' ' + o.symbol + ' @ ' + formatPrice(o.price, o.symbol) : 'this working order') + '?',
+      true, function () {
     apiPost('/api/action/cancel_pending_order', { ticket: ticket }, TIMEOUT.normal).then(function (res) {
       var data = res.data || {};
       if (res.ok && !actionRefused(data)) {
@@ -1563,6 +1569,7 @@
       } else {
         toast(actionFailureMessage('Cancel failed: ', res), 'error');
       }
+    });
     });
   }
 
@@ -1617,13 +1624,53 @@
     else if (name === 'pending') renderPendingInPosPanel();
   }
 
+  /* ── Bugatti Cockpit Confirmation Modal ─────────────────────────────── */
+  function showCockpitConfirm(title, message, isDanger, onConfirm) {
+    var modal = $('cockpit-confirm-modal');
+    if (!modal) {
+      if (window.confirm(message)) onConfirm();
+      return;
+    }
+    var heading = $('confirm-modal-heading');
+    var msg = $('confirm-modal-msg');
+    var icon = $('confirm-modal-icon');
+    var proceed = $('confirm-modal-proceed');
+    var cancel = $('confirm-modal-cancel');
+    var close = $('confirm-modal-close');
+
+    if (heading) heading.textContent = title;
+    if (msg) msg.textContent = message;
+    if (icon) icon.textContent = isDanger ? '🚨' : '⚡';
+    if (proceed) {
+      proceed.className = isDanger ? 'tt-btn tt-btn--danger tt-btn--sm' : 'tt-btn tt-btn--primary tt-btn--sm';
+      proceed.onclick = function () {
+        modal.hidden = true;
+        modal.style.display = 'none';
+        onConfirm();
+      };
+    }
+    var hideModal = function () {
+      modal.hidden = true;
+      modal.style.display = 'none';
+    };
+    if (cancel) cancel.onclick = hideModal;
+    if (close) close.onclick = hideModal;
+
+    modal.hidden = false;
+    modal.style.display = 'flex';
+  }
+
   /* Close one open position by ticket. The server answers HTTP 200 with
      `status` set for a broker refusal, so the HTTP code alone cannot decide the
      outcome. The action endpoint and confirm-then-toast pattern are shared
      with the classic terminal (terminal.js: closePosition). */
   function closePosition(ticket) {
     if (!ticket) return;
-    if (!window.confirm('Close position #' + ticket + '?')) return;
+    var p = (state.positions || []).filter(function (x) { return x.ticket === ticket; })[0];
+    var what = p ? (String(p.type || p.side || '').toUpperCase() + ' ' + num(p.volume, 2) + ' ' + p.symbol +
+      ' (P&L ' + (Number(p.profit) > 0 ? '+' : '') + num(p.profit, 2) + ')') : '';
+    showCockpitConfirm('Close position #' + ticket,
+      'Close ' + (what || 'this position') + ' at market price?', true, function () {
     apiPost('/api/action/close_position', { ticket: ticket }, TIMEOUT.normal).then(function (res) {
       var data = res.data || {};
       if (res.ok && !actionRefused(data)) {
@@ -1631,6 +1678,7 @@
       } else {
         toast(actionFailureMessage('Close failed: ', res), 'error');
       }
+    });
     });
   }
 
@@ -7127,42 +7175,6 @@
         }
       });
     }
-
-  /* ── Bugatti Cockpit Confirmation Modal ─────────────────────────────── */
-  function showCockpitConfirm(title, message, isDanger, onConfirm) {
-    var modal = $('cockpit-confirm-modal');
-    if (!modal) {
-      if (window.confirm(message)) onConfirm();
-      return;
-    }
-    var heading = $('confirm-modal-heading');
-    var msg = $('confirm-modal-msg');
-    var icon = $('confirm-modal-icon');
-    var proceed = $('confirm-modal-proceed');
-    var cancel = $('confirm-modal-cancel');
-    var close = $('confirm-modal-close');
-
-    if (heading) heading.textContent = title;
-    if (msg) msg.textContent = message;
-    if (icon) icon.textContent = isDanger ? '🚨' : '⚡';
-    if (proceed) {
-      proceed.className = isDanger ? 'tt-btn tt-btn--danger tt-btn--sm' : 'tt-btn tt-btn--primary tt-btn--sm';
-      proceed.onclick = function () {
-        modal.hidden = true;
-        modal.style.display = 'none';
-        onConfirm();
-      };
-    }
-    var hideModal = function () {
-      modal.hidden = true;
-      modal.style.display = 'none';
-    };
-    if (cancel) cancel.onclick = hideModal;
-    if (close) close.onclick = hideModal;
-
-    modal.hidden = false;
-    modal.style.display = 'flex';
-  }
 
     var flattenBtn = $('flatten-all');
     if (flattenBtn) {
