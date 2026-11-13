@@ -47,7 +47,13 @@ def get_nano_risk_cap(equity: float, symbol: str = "") -> tuple[float, float]:
     if eq < 250.0:
         return (6.00, 6.0) if is_gold else (5.00, 5.0)
     elif eq < 2500.0:
-        return (28.00, 5.50) if is_gold else (12.00, 2.50)
+        if is_gold:
+            return (28.00, 5.50)
+        # BTC's 0.01-lot day-trading stops (~$1,500-2,000) cost $15-20; the $12
+        # cap blocked every one of them on a ~$500 account (operator, 2026-11-14).
+        if sym.startswith("BTC"):  # BTCUSD / BTCUSD#, not ETHBTC
+            return (20.00, 4.00)
+        return (12.00, 2.50)
     else:
         return (float("inf"), 1.0) if is_gold else (float("inf"), 0.50)
 

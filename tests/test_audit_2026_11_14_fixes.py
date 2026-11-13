@@ -112,3 +112,17 @@ def test_gold_order_take_profit_is_two_and_a_half_times_the_stop():
     reward, risk = decision.entry_price - decision.take_profit, decision.stop_loss - decision.entry_price
     assert abs(reward / risk - 2.5) < 0.01  # tick rounding only
     assert decision.risk_reward_ratio == 2.5
+
+
+def test_btc_min_lot_day_trade_fits_the_raised_cap_on_a_500_dollar_account():
+    from jarvis.risk.account_tier import get_nano_risk_cap
+    from jarvis.risk.position_sizing import PositionSizer
+
+    assert get_nano_risk_cap(508.0, "BTCUSD") == (20.0, 4.0)
+    assert get_nano_risk_cap(508.0, "ETHBTC") == (12.0, 2.5)  # only BTC-quoted-in-USD moved
+    info = {"name": "BTCUSD#", "volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01,
+            "trade_contract_size": 1.0, "trade_tick_value": 0.01, "trade_tick_size": 0.01}
+    # $1,929 stop at 0.01 lot = $19.29 risk: was rejected under the $12 cap.
+    assert PositionSizer.calculate_lot_size(508.0, 68365.66, 70294.51, 0.5, info) == 0.01
+    # The $6,018 swing stop ($60) is still refused.
+    assert PositionSizer.calculate_lot_size(508.0, 69612.19, 75630.64, 0.5, info) == 0.0
