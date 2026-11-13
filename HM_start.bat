@@ -8,6 +8,6 @@ echo ======================================================================
 if exist "C:\Users\musu9\AppData\Local\Programs\Python\Python312\python.exe" (
     "C:\Users\musu9\AppData\Local\Programs\Python\Python312\python.exe" HM_start.py %*
 ) else (
-    py -3.12 HM_start.py %*
+    py -3.12 HM_start.py %* 2>nul || python HM_start.py %*
 )
 pause
