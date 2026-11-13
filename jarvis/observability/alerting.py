@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Deque, Dict, List, Optional
 from urllib import request as urllib_request
+from urllib.parse import urlparse
 
 logger = logging.getLogger("JARVIS_Alerting")
 
@@ -171,7 +172,8 @@ class AlertManager:
                 if resp.status >= 400:
                     logger.warning("Webhook alert failed with HTTP status %d", resp.status)
         except Exception as e:
-            logger.warning("Webhook dispatch error to %s: %s", self._webhook_url, e)
+            # Host only: Telegram/Discord webhook URLs embed their secret token.
+            logger.warning("Webhook dispatch error to %s: %s", urlparse(self._webhook_url).netloc, e)
 
     def get_recent_alerts(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Returns the most recent alerts in chronological reverse (newest first)."""

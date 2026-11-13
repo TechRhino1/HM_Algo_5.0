@@ -586,7 +586,10 @@ class RiskEngine:
                     "STREAK_DELEVERAGING: Consecutive losses = %d; scaling position size to %.2fx.",
                     self.circuit_breaker.consecutive_losses, streak_mult
                 )
-            combined_multiplier = heat_res.risk_multiplier * dd_risk_mult * daily_risk_mult * streak_mult * corr_scaling_factor
+            # The recovery channel trades through a daily-loss halt under its own hard cap (step below),
+            # so the daily tier's 0.0 must not zero it; every other halt still applies.
+            _daily_for_size = 1.0 if recovery_mode else daily_risk_mult
+            combined_multiplier = heat_res.risk_multiplier * dd_risk_mult * _daily_for_size * streak_mult * corr_scaling_factor
 
             # Micro-account adaptive risk boost: the base 0.5% is designed for
             # $10k+ accounts.  On a $100 account 0.5% = $0.50, which cannot buy

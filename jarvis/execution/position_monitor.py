@@ -1171,11 +1171,17 @@ class PositionMonitorEngine:
                 tp2_ratio = getattr(policy, "tp2_r", 2.0)
                 tp3_ratio = getattr(policy, "tp3_r", 3.5)
                 m_tp2 = pos.tp if pos.tp > 0 else ((pos.open_price + (risk_dist * tp2_ratio)) if pos.type == "BUY" else (pos.open_price - (risk_dist * tp2_ratio)))
-                m_tp3 = (pos.open_price + (risk_dist * tp3_ratio)) if pos.type == "BUY" else (pos.open_price - (risk_dist * tp3_ratio))
+                # A broker TP wider than tp3_r used to put the runner target BELOW TP2; keep the ladder ordered.
+                tp2_dist = abs(m_tp2 - pos.open_price)
+                tp3_dist = max(risk_dist * tp3_ratio, tp2_dist + 0.5 * risk_dist)
+                m_tp3 = (pos.open_price + tp3_dist) if pos.type == "BUY" else (pos.open_price - tp3_dist)
+                _rd = max(risk_dist, 1e-9)
                 self._position_milestones[pos.ticket] = {
                     "tp1": round(m_tp1, digits),
                     "tp2": round(m_tp2, digits),
                     "tp3": round(m_tp3, digits),
+                    "tp2_r": tp2_dist / _rd,
+                    "tp3_r": tp3_dist / _rd,
                     "status": "OPEN"
                 }
 
@@ -1291,8 +1297,10 @@ class PositionMonitorEngine:
 
             # ── 6. 3-Tier Milestone Progression Tracking ────────────────────
             if pos.ticket in self._position_milestones:
-                tp3_thresh = getattr(policy, "tp3_r", 3.0)
-                tp2_thresh = getattr(policy, "tp2_r", 2.0)
+                # Status must follow the milestone PRICES shown to the user, not the generic policy ratios.
+                _ms = self._position_milestones[pos.ticket]
+                tp3_thresh = _ms.get("tp3_r", getattr(policy, "tp3_r", 3.0))
+                tp2_thresh = _ms.get("tp2_r", getattr(policy, "tp2_r", 2.0))
                 if current_r >= tp3_thresh:
                     self._position_milestones[pos.ticket]["status"] = "TP3_RUNNER_TRAILING"
                 elif current_r >= tp2_thresh:

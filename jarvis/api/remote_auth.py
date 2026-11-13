@@ -136,6 +136,7 @@ class RemoteAuthEngine:
 
     # In-memory user database with salted hashes and roles
     _users: ClassVar[Dict[str, Dict[str, Any]]] = {}
+    _synced_admin_pass: ClassVar[Optional[str]] = None
 
     @classmethod
     def is_local_client(cls, client_ip: str) -> bool:
@@ -211,6 +212,11 @@ class RemoteAuthEngine:
         # 1. Primary Admin Account - dynamically sync with current resolved password
         current_admin_pass = _resolve_admin_password()
         admin_user = ADMIN_USERNAME.strip().lower()
+        # Called on every request: re-running bcrypt + SQLite each time let any bogus
+        # Bearer token burn CPU, and reverted an in-process admin password change.
+        # Only re-sync when the configured password actually changed.
+        if cls._synced_admin_pass == current_admin_pass and admin_user in cls._users:
+            return
         if admin_user not in cls._users or not cls._verify_password(current_admin_pass, cls._users[admin_user].get("password_hash", "")):
             cls._users[admin_user] = _make_user_record(admin_user, current_admin_pass, "ADMIN", "System Administrator", "ACTIVE")
 
@@ -270,6 +276,7 @@ class RemoteAuthEngine:
                                 cls._users[u_name]["status"] = r["status"] if "status" in r.keys() else "ACTIVE"
             finally:
                 conn.close()
+            cls._synced_admin_pass = current_admin_pass
         except Exception as e:
             logger.warning(f"Could not initialize or sync persistent user DB: {e}")
 
@@ -364,7 +371,15 @@ class RemoteAuthEngine:
         if status != "ACTIVE":
             return None, "Account is inactive."
 
-        # Verify password validity first so authentic users with correct password can always log in.
+        # Lockout must be checked BEFORE the password: checking it only after a
+        # wrong guess let a brute-forcer keep guessing and still log in on a hit.
+        allowed_ip, remaining_ip = cls.check_rate_limit(client_ip or "")
+        if not allowed_ip:
+            return None, f"Too many failed login attempts. Account temporarily locked for {remaining_ip}s."
+        allowed_user, remaining_user = cls.check_rate_limit(user_key)
+        if not allowed_user:
+            return None, f"Too many failed login attempts for user '{user_key}'. Locked for {remaining_user}s."
+
         is_valid = cls._verify_password(pwd, user_data.get("password_hash", ""))
 
         if is_valid:
@@ -376,15 +391,6 @@ class RemoteAuthEngine:
                 "full_name": user_data.get("full_name", user_key.title()),
                 "status": status
             }, ""
-
-        # Enforce rate limiting only on failed password attempts
-        allowed_ip, remaining_ip = cls.check_rate_limit(client_ip or "")
-        if not allowed_ip:
-            return None, f"Too many failed login attempts. Account temporarily locked for {remaining_ip}s."
-
-        allowed_user, remaining_user = cls.check_rate_limit(user_key)
-        if not allowed_user:
-            return None, f"Too many failed login attempts for user '{user_key}'. Locked for {remaining_user}s."
 
         cls.record_failed_attempt(client_ip or "")
         cls.record_failed_attempt(user_key)
@@ -454,7 +460,10 @@ class RemoteAuthEngine:
             return None
 
         # Clean up expired tokens
-        cls._tokens = {t: exp for t, exp in cls._tokens.items() if exp > now}
+        # Prune in place: rebinding the dict raced concurrent logins (ThreadingHTTPServer)
+        # and could drop a just-issued token.
+        for t in [t for t, exp in list(cls._tokens.items()) if exp <= now]:
+            cls._tokens.pop(t, None)
         # Sweep bookkeeping whose window has closed. A revoked token only needs to
         # be remembered until it could no longer validate anyway, and a failed-login
         # stamp only matters for an hour — neither is load-bearing forever, and

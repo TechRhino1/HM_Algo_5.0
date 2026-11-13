@@ -113,11 +113,8 @@ class MT5Client:
                         trade_mode = getattr(acc, "trade_mode", 0)
                         mode_str = "DEMO" if trade_mode == 0 else ("REAL" if trade_mode == 2 else "CONTEST")
                         logger.info(f"Connected to MT5 Server: {acc.server} | Login: #{acc.login} | TradeMode: {mode_str} | Equity: ${acc.equity:.2f}")
-                        # Update mode based on actual account trade_mode
-                        if trade_mode == 0:
-                            self.mode = "demo"
-                        elif trade_mode == 2:
-                            self.mode = "live"
+                        # Never adopt the mode FROM the account: that silently turned a demo run on a
+                        # REAL account into "live" (bypassing JARVIS_CONFIRM_LIVE). Mismatch = blocked at send.
                         if self.mode == "demo" and trade_mode == 2:
                             logger.critical(
                                 f"SAFETY WARNING: Execution mode is DEMO, but connected to REAL MT5 account #{acc.login}! "
@@ -683,7 +680,8 @@ class MT5Client:
                 vol_step = getattr(sym_info, "volume_step", 0.01)
 
                 if vol_step > 0:
-                    steps = round((volume - vol_min) / vol_step)
+                    # Round DOWN: rounding to nearest could exceed the risk ceiling (0.15 -> 0.2 on step 0.1).
+                    steps = math.floor((volume - vol_min) / vol_step + 1e-9)
                     quantized_vol = vol_min + steps * vol_step
                 else:
                     quantized_vol = volume
@@ -748,6 +746,9 @@ class MT5Client:
                         if result and result.retcode in [10030, 10031]:
                             request["type_filling"] = getattr(mt5, "ORDER_FILLING_RETURN", 2)
                             result = mt5.order_send(request)
+                        # A fill on the fallback mode must stop the loop, or the next attempt sends a DUPLICATE order.
+                        if result is not None and result.retcode in [getattr(mt5, "TRADE_RETCODE_DONE", 10009), getattr(mt5, "TRADE_RETCODE_PLACED", 10008)]:
+                            break
 
                     # Requote error (10004) -> refresh tick price and retry after small backoff
                     if result and result.retcode == 10004 and attempt < (max_retries - 1):
@@ -1331,7 +1332,7 @@ class MT5Client:
 
                 digits = sym_info.digits
                 point = sym_info.point or (10 ** -digits)
-                min_stop_dist = max(getattr(sym_info, "trade_stops_level", 0), getattr(sym_info, "freeze_level", 0), 5) * point
+                min_stop_dist = max(getattr(sym_info, "trade_stops_level", 0), getattr(sym_info, "trade_freeze_level", 0), 5) * point
 
                 tick = mt5.symbol_info_tick(symbol)
                 cur_price = (tick.bid if p.type == getattr(mt5, "POSITION_TYPE_BUY", 0) else tick.ask) if tick else p.price_current

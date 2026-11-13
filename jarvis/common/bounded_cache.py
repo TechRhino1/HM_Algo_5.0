@@ -97,7 +97,10 @@ class BoundedTTLCache:
         if self._is_expired(key):
             self._drop(key)
             return default
-        value = self._data.pop(key)
+        # pop with default: a concurrent reader may have evicted the key since the check above.
+        value = self._data.pop(key, _MISSING)
+        if value is _MISSING:
+            return default
         self._data[key] = value
         return value
 

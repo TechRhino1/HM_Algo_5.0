@@ -252,7 +252,7 @@ class SyntheticDollarIndexEngine:
                 gold_impact=gold_impact,
                 gold_penalty=gold_penalty,
                 fx_bias=fx_bias,
-                timestamp=now,
+                timestamp=time.time(),  # `now` is local to analyze(); the NameError forced the neutral fallback every call
                 is_live=True
             )
 

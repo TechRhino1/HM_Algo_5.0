@@ -943,7 +943,9 @@ class JarvisRequestHandler(BaseHTTPRequestHandler):
             elif path in ["/api/auth/me", "/api/auth/verify"]:
                 user = self._get_auth_user()
                 if user:
-                    self._send_json({"status": "AUTHENTICATED", "valid": True, "user": user})
+                    # Never echo the session token: it is HttpOnly for a reason (POST /verify strips it too).
+                    self._send_json({"status": "AUTHENTICATED", "valid": True,
+                                     "user": {k: v for k, v in user.items() if k != "token"}})
                 else:
                     self._send_json({"status": "UNAUTHORIZED", "valid": False, "error": "Not authenticated"}, status_code=401)
             elif path == "/api/stream/telemetry":

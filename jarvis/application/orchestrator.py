@@ -596,7 +596,7 @@ class JarvisOrchestrator:
         lots: float,
     ) -> None:
         """Persists open-time ML features and trade memory for FILLED and PLACED orders."""
-        if not exec_res or exec_res.get("status") not in ("FILLED", "PLACED"):
+        if not exec_res or exec_res.get("status") not in ("FILLED", "PARTIAL", "PLACED"):
             return
 
         ticket = exec_res.get("ticket")
@@ -2076,7 +2076,7 @@ class JarvisOrchestrator:
                 try:
                     exec_res = self.execution_engine.execute_decision(decision, lots)
                     status = (exec_res or {}).get("status")
-                    if status in ("FILLED", "PLACED"):
+                    if status in ("FILLED", "PARTIAL", "PLACED"):
                         self.risk_engine.commit_risk(canonical_sym)
                     elif status == "UNKNOWN":
                         # The order may be live at the broker. Keep the risk
@@ -2102,7 +2102,7 @@ class JarvisOrchestrator:
                     with self._execution_lock:
                         self._execution_in_progress.discard(canonical_sym)
                         _st = (exec_res or {}).get("status")
-                        if _st in ("FILLED", "UNKNOWN", "PLACED"):
+                        if _st in ("FILLED", "PARTIAL", "UNKNOWN", "PLACED"):
                             self._last_execution_time[canonical_sym] = time.time()
                             logger.info(f"Execution lock released for {canonical_sym}. Cooldown {int(style_cd)}s started.")
             # Record pending features for online learning and journal entry (§17)
@@ -2299,7 +2299,7 @@ class JarvisOrchestrator:
                 for s, st, r in raw_results:
                     if s == sym and st == candidate.trade_style:
                         exec_item = r.get("execution")
-                        if exec_item and exec_item.get("status") in ("FILLED", "PLACED"):
+                        if exec_item and exec_item.get("status") in ("FILLED", "PARTIAL", "PLACED"):
                             already_fired = True
                         break
 
@@ -2496,7 +2496,7 @@ class JarvisOrchestrator:
                             )
                         logger.info(f"🚀 Autonomous Multi-Style Execution dispatched for {candidate.symbol} ({candidate.trade_style})")
                         exec_res = self.execution_engine.execute_decision(decision, lots)
-                        if exec_res and exec_res.get("status") in ("FILLED", "PLACED"):
+                        if exec_res and exec_res.get("status") in ("FILLED", "PARTIAL", "PLACED"):
                             self.risk_engine.commit_risk(canonical_sym)
                             self._record_open_trade_context(
                                 exec_res=exec_res,
@@ -2505,6 +2505,9 @@ class JarvisOrchestrator:
                                 trade_style=candidate.trade_style,
                                 lots=lots
                             )
+                        elif exec_res and exec_res.get("status") == "UNKNOWN":
+                            # Same as run_cycle: the order may be live, so keep the reservation until sync reconciles.
+                            logger.error(f"Arbiter order for {canonical_sym} has UNKNOWN outcome -- holding risk reservation.")
                         else:
                             self.risk_engine.release_risk(canonical_sym)
                     except Exception as e:
@@ -2513,7 +2516,7 @@ class JarvisOrchestrator:
                     finally:
                         with self._execution_lock:
                             self._execution_in_progress.discard(canonical_sym)
-                            if exec_res and exec_res.get("status") in ("FILLED", "UNKNOWN", "PLACED"):
+                            if exec_res and exec_res.get("status") in ("FILLED", "PARTIAL", "UNKNOWN", "PLACED"):
                                 self._last_execution_time[canonical_sym] = time.time()
                                 logger.info(f"Execution lock released for {canonical_sym}. Cooldown {self._SAME_SYMBOL_COOLDOWN_SEC}s started.")
                     # Single trade executed this pass

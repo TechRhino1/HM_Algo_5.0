@@ -85,6 +85,10 @@ class MarketStructureEngine:
         # Dynamic Momentum & Price Location Override:
         # Prevents stale historical swing pivots (lagged by window w) from locking
         # bias in BEARISH during a violent upward rally, or BULLISH during a collapse.
+        # Neutral defaults: the micro-MSS block below reads these for frames of 13-19 bars too
+        # (UnboundLocalError); with these values it cannot fire on such short frames.
+        ema20 = latest_close
+        rebound_pct = 0.5
         if len(df) >= 20:
             c_series = pd.Series(closes)
             ema20 = float(c_series.ewm(span=min(20, len(df)), adjust=False).mean().iloc[-1])

@@ -64,6 +64,10 @@ class PositionSizer:
             risk_pct *= 0.75
 
         # Portfolio heat scaling (e.g. 1.0x Normal, 0.75x Moderate, 0.50x High)
+        # 0.0 is an explicit HALT from the drawdown guard / daily-loss tier / loss-streak
+        # breaker. Flooring it to 0.25 (and then the micro floor) kept trading through halts.
+        if portfolio_heat_multiplier <= 0:
+            return 0.0
         risk_pct *= max(0.25, min(1.0, portfolio_heat_multiplier))
 
         # Fractional Kelly is computed for reporting but deliberately NOT used for
