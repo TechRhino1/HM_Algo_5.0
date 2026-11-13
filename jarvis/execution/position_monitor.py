@@ -140,6 +140,7 @@ class PositionMonitorEngine:
         self._highest_favorable_price: Dict[int, float] = {}
         # Pending limit order near-touch micro-nudge tracking (one-shot per ticket)
         self._pending_best_gap: Dict[int, float] = {}
+        self._pending_near_first_ts: Dict[int, float] = {}
         self._pending_nudged: Set[int] = set()
 
         # D19 — the trade's own path, kept as excursions in PRICE UNITS.
@@ -663,23 +664,39 @@ class PositionMonitorEngine:
         best_gap = min(prev_best, curr_gap)
         self._pending_best_gap[t_id] = best_gap
 
-        # Trigger only if price actually came within near_touch_tol AND started bouncing away slightly
-        if not (0 < best_gap <= near_touch_tol and curr_gap > best_gap + bounce_retrace and curr_gap <= near_touch_tol * 2.5):
+        now_mono = time.monotonic()
+        if 0 < curr_gap <= near_touch_tol:
+            self._pending_near_first_ts.setdefault(t_id, now_mono)
+        first_near_ts = self._pending_near_first_ts.get(t_id)
+        dwelled_near_touch = (
+            first_near_ts is not None
+            and (now_mono - first_near_ts) >= 45.0
+            and 0 < curr_gap <= near_touch_tol * 2.5
+        )
+        bounced_after_touch = (
+            0 < best_gap <= near_touch_tol
+            and curr_gap > best_gap + bounce_retrace
+            and curr_gap <= near_touch_tol * 2.5
+        )
+        if not (bounced_after_touch or dwelled_near_touch):
             return
 
         # Compute nudged limit inside near-touch range while preserving broker validity & RR >= 1.5
         shift = min(near_touch_tol, best_gap + max(pip_sz * 0.5, spread_dist * 0.25))
         if sl_price > 0:
             sl_dist_orig = abs(open_price - sl_price)
-            if sl_dist_orig <= 0 or shift > (sl_dist_orig * 0.15):
+            if sl_dist_orig <= 0:
                 return
+            shift = min(shift, sl_dist_orig * 0.15)
 
         if otype == "SELL_LIMIT":
             nudged_px = round(max(ask_val + bounce_retrace, open_price - shift), digits)
             if nudged_px >= open_price:
                 return
         else:
-            nudged_px = round(min(bid_val - bounce_retrace, open_price + shift), digits)
+            # BUY_LIMIT fills on Ask; anchor upper bound below Ask (not Bid - retrace)
+            # so tight spread pairs aren't stranded 1+ spread below Ask fill price.
+            nudged_px = round(min(ask_val - bounce_retrace, open_price + shift), digits)
             if nudged_px <= open_price:
                 return
 
@@ -705,6 +722,7 @@ class PositionMonitorEngine:
             pending = self.mt5_client.get_pending_orders()
             if not pending:
                 self._pending_best_gap.clear()
+                self._pending_near_first_ts.clear()
                 self._pending_nudged.clear()
                 return
 
@@ -769,8 +787,13 @@ class PositionMonitorEngine:
                             cancel_reason = f"Runaway target reached without fill ({c_price:.4f} >= TP {tp_price:.4f})"
                         elif tp_price > 0 and tp_price > open_price and c_price >= (open_price + 0.85 * (tp_price - open_price)) and age > 60.0:
                             cancel_reason = f"Runaway target 85% reached without fill ({c_price:.4f} near TP {tp_price:.4f})"
-                        # Invalidation 3: Bearish structure shift or severe adverse momentum
-                        elif (getattr(st, "choch", False) and getattr(st, "bias", "") == "BEARISH") or trend_score <= -30.0:
+                        # Invalidation 3: Sustained adverse structure + momentum shift after initial placement grace (90s)
+                        elif (
+                            age >= 90.0
+                            and getattr(st, "choch", False)
+                            and getattr(st, "bias", "") == "BEARISH"
+                            and trend_score <= -55.0
+                        ):
                             cancel_reason = f"Adverse market structure shift (choch_bear, trend_score={trend_score:.1f})"
 
                     elif "SELL" in otype:
@@ -782,8 +805,13 @@ class PositionMonitorEngine:
                             cancel_reason = f"Runaway target reached without fill ({c_price:.4f} <= TP {tp_price:.4f})"
                         elif tp_price > 0 and tp_price < open_price and c_price <= (open_price - 0.85 * (open_price - tp_price)) and age > 60.0:
                             cancel_reason = f"Runaway target 85% reached without fill ({c_price:.4f} near TP {tp_price:.4f})"
-                        # Invalidation 3: Bullish structure shift or severe adverse momentum
-                        elif (getattr(st, "choch", False) and getattr(st, "bias", "") == "BULLISH") or trend_score >= 30.0:
+                        # Invalidation 3: Sustained adverse structure + momentum shift after initial placement grace (90s)
+                        elif (
+                            age >= 90.0
+                            and getattr(st, "choch", False)
+                            and getattr(st, "bias", "") == "BULLISH"
+                            and trend_score >= 55.0
+                        ):
                             cancel_reason = f"Adverse market structure shift (choch_bull, trend_score={trend_score:.1f})"
 
                     if not cancel_reason:
@@ -796,6 +824,7 @@ class PositionMonitorEngine:
             for old_t in list(self._pending_best_gap):
                 if old_t not in active_tickets:
                     self._pending_best_gap.pop(old_t, None)
+                    self._pending_near_first_ts.pop(old_t, None)
                     self._pending_nudged.discard(old_t)
         except Exception as e:
             logger.debug(f"_manage_pending_orders_tick error: {e}")
@@ -868,8 +897,17 @@ class PositionMonitorEngine:
                 atr = 0.0
 
         # Dynamic ATR stop distance classification if manual trade
-        if self._is_manual_trade(pos) and pos.sl > 0 and pos.open_price > 0 and atr > 1e-6:
-            sl_dist = abs(pos.open_price - pos.sl)
+        sl_val = getattr(pos, "sl", 0.0)
+        open_val = getattr(pos, "open_price", 0.0)
+        try:
+            sl_f = float(sl_val)
+            open_f = float(open_val)
+        except (TypeError, ValueError):
+            sl_f = 0.0
+            open_f = 0.0
+
+        if self._is_manual_trade(pos) and sl_f > 0 and open_f > 0 and atr > 1e-6:
+            sl_dist = abs(open_f - sl_f)
             atr_ratio = sl_dist / atr
             if atr_ratio < 0.85:
                 return "SCALP"
@@ -1386,6 +1424,7 @@ class PositionMonitorEngine:
                     digits=digits,
                     current_sl=new_sl,
                     policy=policy,
+                    open_dur_sec=open_dur_sec,
                 )
                 if should_close:
                     logger.warning(
@@ -1400,7 +1439,9 @@ class PositionMonitorEngine:
 
             # ── 4. Regime, VWAP & Momentum discretionary checks (Suppressed in Grace Period) ──
             if not in_grace_period:
-                new_sl, act = self._check_regime_invalidation(pos, ctx, regime, c_price, atr, new_sl)
+                new_sl, act = self._check_regime_invalidation(
+                    pos, ctx, regime, c_price, atr, new_sl, digits=digits, pip_size=pip_size
+                )
                 if act:
                     actions.append(act)
 
@@ -2009,8 +2050,10 @@ class PositionMonitorEngine:
         c_price: float,
         atr: float,
         current_sl: float,
+        digits: int = 4,
+        pip_size: float = 0.0001,
     ):
-        """If the market regime flips strongly against the trade, tighten SL to lock 80% profit."""
+        """If the market regime flips strongly against a winning trade (>= +0.75R), lock 50% of floating profit."""
         if regime is None:
             return current_sl, None
 
@@ -2030,44 +2073,26 @@ class PositionMonitorEngine:
             if is_invalidated:
                 profit_pips = (c_price - pos.open_price) if pos.type == "BUY" else (pos.open_price - c_price)
                 risk_dist = self._initial_risk_dist.get(pos.ticket, atr * 1.5)
-                # Ratchet on regime invalidation once secured >= 0.75R profit
+                min_sl_step = max(float(pip_size or 0.0001), 10.0 ** (-digits))
+                # Ratchet on regime invalidation once secured >= 0.75R profit;
+                # underwater positions retain structural SL breathing room (no half-SL choking).
                 if profit_pips >= (risk_dist * 0.75):
                     if pos.type == "BUY":
-                        candidate = pos.open_price + (profit_pips * 0.50)
-                        if candidate > current_sl:
+                        candidate = round(pos.open_price + (profit_pips * 0.50), digits)
+                        if candidate > current_sl and (candidate - current_sl) >= min_sl_step:
                             logger.info(
                                 f"🔄 Regime invalidation for #{pos.ticket} ({regime_str} conf={confidence:.2f}) → "
-                                f"50% profit lock @ {candidate:.4f}"
+                                f"50% profit lock @ {candidate:.{digits}f}"
                             )
-                            return candidate, f"REGIME_INVALIDATION@{candidate:.4f}"
+                            return candidate, f"REGIME_INVALIDATION@{candidate:.{digits}f}"
                     else:
-                        candidate = pos.open_price - (profit_pips * 0.50)
-                        if current_sl == 0 or candidate < current_sl:
+                        candidate = round(pos.open_price - (profit_pips * 0.50), digits)
+                        if (current_sl == 0 or (candidate < current_sl and (current_sl - candidate) >= min_sl_step)):
                             logger.info(
                                 f"🔄 Regime invalidation for #{pos.ticket} ({regime_str} conf={confidence:.2f}) → "
-                                f"50% profit lock @ {candidate:.4f}"
+                                f"50% profit lock @ {candidate:.{digits}f}"
                             )
-                            return candidate, f"REGIME_INVALIDATION@{candidate:.4f}"
-                # Early Defense for Underwater Positions: If regime turns strongly against position
-                # (confidence >= 0.75 or STRONG_TREND), tighten SL to save capital (cut potential loss)
-                elif profit_pips < 0 and (confidence >= 0.75 or "STRONG" in regime_str):
-                    tightened_dist = max(risk_dist * 0.50, atr * 1.0)
-                    if pos.type == "BUY":
-                        candidate = round(pos.open_price - tightened_dist, 4)
-                        if candidate > current_sl and candidate < c_price:
-                            logger.info(
-                                f"🛡️ High-confidence regime inversion for underwater #{pos.ticket} ({regime_str} conf={confidence:.2f}) → "
-                                f"Tightening SL to {candidate:.4f} to cap downside."
-                            )
-                            return candidate, f"REGIME_DRAWDOWN_TIGHTEN@{candidate:.4f}"
-                    else:
-                        candidate = round(pos.open_price + tightened_dist, 4)
-                        if (current_sl == 0 or candidate < current_sl) and candidate > c_price:
-                            logger.info(
-                                f"🛡️ High-confidence regime inversion for underwater #{pos.ticket} ({regime_str} conf={confidence:.2f}) → "
-                                f"Tightening SL to {candidate:.4f} to cap downside."
-                            )
-                            return candidate, f"REGIME_DRAWDOWN_TIGHTEN@{candidate:.4f}"
+                            return candidate, f"REGIME_INVALIDATION@{candidate:.{digits}f}"
         except Exception as e:
             logger.debug(f"Regime invalidation check failed for #{pos.ticket}: {e}")
 
@@ -2159,6 +2184,7 @@ class PositionMonitorEngine:
         digits: int,
         current_sl: float,
         policy: Any,
+        open_dur_sec: float = 9999.0,
     ) -> Tuple[float, Optional[str], bool, Optional[str]]:
         """
         Institutional Profit Booking & Direction Reversal Defense:
@@ -2275,11 +2301,16 @@ class PositionMonitorEngine:
 
             # ── PHASE 0: Early Structural Thesis Invalidation (current_r < 0.20R) ──
             if current_r < 0.20:
-                # Decisive structural breakdown:
-                # Must be genuinely underwater (current_r <= -0.40R) with confirmed opposite CHoCH/BOS and signal_count >= 3.
-                # Never kill a trade floating between -0.35R and +0.20R where normal retests occur!
-                is_momentum_wreck = ("ADVERSE_MOMENTUM" in sig_summary and "MTF" in sig_summary and signal_count >= 3 and current_r <= -0.45)
-                if (has_structural_break and signal_count >= 3 and current_r <= -0.40) or is_momentum_wreck:
+                # Decisive structural breakdown only after minimum setup dwell (>= 15m)
+                # and meaningful adverse move (<= -0.50R) so normal noise cannot whipsaw.
+                is_momentum_wreck = (
+                    open_dur_sec >= 900.0
+                    and "ADVERSE_MOMENTUM" in sig_summary
+                    and "MTF" in sig_summary
+                    and signal_count >= 3
+                    and current_r <= -0.55
+                )
+                if (open_dur_sec >= 900.0 and has_structural_break and signal_count >= 3 and current_r <= -0.50) or is_momentum_wreck:
                     return current_sl, None, True, f"STRUCTURAL_THESIS_INVALIDATION({current_r:.2f}R | {sig_summary})"
                 return current_sl, None, False, None
 

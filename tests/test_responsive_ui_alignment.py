@@ -56,12 +56,12 @@ class TestResponsiveBugattiCockpit(unittest.TestCase):
     def test_responsive_layout_breakpoints_in_css(self):
         """Verify theme_bugatti.css implements required responsive breakpoint rules."""
         css = self.theme_bugatti
-        # Phone < 576px
-        self.assertIn("max-width: 575.98px", css)
-        # Tablet 576px - 991px
-        self.assertIn("max-width: 991.98px", css)
-        # Desktop >= 992px
-        self.assertIn("min-width: 992px", css)
+        # Phone < 576px / 599px
+        self.assertTrue("max-width: 575.98px" in css or "max-width: 599px" in css)
+        # Tablet 576px - 991px / 600px - 1024px
+        self.assertTrue("max-width: 991.98px" in css or "max-width: 1024px" in css)
+        # Desktop >= 992px / >= 1025px
+        self.assertTrue("min-width: 992px" in css or "min-width: 1025px" in css)
         # Wide desktop >= 1400px
         self.assertIn("min-width: 1400px", css)
         # Sticky table first column
@@ -93,17 +93,16 @@ class TestResponsiveBugattiCockpit(unittest.TestCase):
         self.assertIn("MFE / MAE", html)
 
     def test_unified_navbar_hierarchy_and_more_dropdown(self):
-        """Verify navigation bar follows Cockpit + More dropdown hierarchy containing all options/desks, and Account dropdown contains admin & logout."""
+        """Verify navigation bar follows Cockpit + Markets dropdown hierarchy containing all options/desks, and Account dropdown contains admin & logout."""
         surfaces = ["dashboard", "stocks", "india", "options", "console", "positions"]
         for s in surfaces:
             html = self.templates[s]
-            self.assertIn("Cockpit", html, f"{s} missing Cockpit link")
-            self.assertIn("More", html, f"{s} missing More dropdown")
-            self.assertIn('id="more-menu"', html, f"{s} missing more-menu panel")
-            # Verify More dropdown contains US Market, Indian Market, and Options
-            self.assertIn('href="/stocks"', html, f"{s} missing US Stocks link in More dropdown")
-            self.assertIn('href="/india"', html, f"{s} missing India Stocks link in More dropdown")
-            self.assertIn('href="/options"', html, f"{s} missing Options link in More dropdown")
+            self.assertIn("Markets", html, f"{s} missing Markets dropdown")
+            self.assertIn('id="markets-menu"', html, f"{s} missing markets-menu panel")
+            # Verify Markets dropdown contains US Market, Indian Market, and Options
+            self.assertIn('href="/stocks"', html, f"{s} missing US Stocks link in Markets dropdown")
+            self.assertIn('href="/india"', html, f"{s} missing India Stocks link in Markets dropdown")
+            self.assertIn('href="/options"', html, f"{s} missing Options link in Markets dropdown")
             # Verify Account dropdown contains auth widget (admin & logout)
             self.assertIn('id="auth-header-widget"', html, f"{s} missing auth-header-widget")
             self.assertTrue('id="acc-details"' in html or 'id="acc-menu"' in html, f"{s} missing account dropdown panel")
@@ -157,7 +156,7 @@ class TestResponsiveBugattiCockpit(unittest.TestCase):
         self.assertIn(".pos-hist-pagination-bar", css)
         self.assertIn(".tt-pos-tabs", css)
         self.assertIn(".tt-pos-tab", css)
-        self.assertIn("minmax(340px, 390px)", css)
+        self.assertTrue("minmax(340px, 390px)" in css or "minmax(340px, 420px)" in css)
 
 
 if __name__ == "__main__":

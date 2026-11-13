@@ -116,7 +116,7 @@ class PositionSizer:
         # inflated 0.776% but over 2x the honest 0.575% -- so such a trade is now
         # refused. That is the correct answer to "you cannot risk 0.5% here",
         # but it does mean small accounts stop trading wide-stop symbols.
-        is_micro_account = account_balance < 250.0
+        is_micro_account = account_balance <= 500.0
         is_high_conviction = (model_confidence >= 0.70) or (combined_scaler >= 1.10)
 
         if is_micro_account:

@@ -176,8 +176,7 @@ class AlertManager:
     def get_recent_alerts(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Returns the most recent alerts in chronological reverse (newest first)."""
         with self._history_lock:
-            items = list(self._history)
-        items.sort(key=lambda a: a.timestamp, reverse=True)
+            items = list(reversed(self._history))
         return [a.to_dict() for a in items[:limit]]
 
     def clear(self) -> None:

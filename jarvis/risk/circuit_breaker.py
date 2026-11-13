@@ -212,7 +212,13 @@ class CircuitBreaker:
         """Inject the time source (backtests pass bar time; live passes None -> wall clock)."""
         self._now = clock if clock is not None else time.time
 
-    def record_trade_result(self, is_win: bool, symbol: str = "", regime: str = ""):
+    def record_trade_result(
+        self,
+        is_win: bool,
+        symbol: str = "",
+        regime: str = "",
+        r_multiple: Optional[float] = None,
+    ):
         now = self._now()
         if is_win:
             self.consecutive_losses = 0
@@ -222,6 +228,15 @@ class CircuitBreaker:
                 self.regime_losses[regime] = 0
             self._save_state()
         else:
+            # Scratch/time-stop exits near flat (-0.15R < R <= 0) must not arm
+            # consecutive-loss or 45m velocity halts as full -1R stop-outs.
+            if r_multiple is not None and -0.15 < float(r_multiple) <= 0.0:
+                logger.info(
+                    "CircuitBreaker: ignoring near-flat scratch exit for %s (R=%.2f > -0.15R).",
+                    symbol or "UNKNOWN", float(r_multiple),
+                )
+                return
+
             self.consecutive_losses += 1
             self._loss_timestamps.append(now)
 

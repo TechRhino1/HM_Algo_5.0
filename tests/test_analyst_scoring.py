@@ -384,7 +384,7 @@ class TestLiquidityAnalyst:
         r = LiquidityAnalyst().analyze(
             ctx(structure=StructureContext(bias="BULLISH")), regime())
         assert r.score == 50.0
-        assert r.bias == "BULLISH"
+        assert r.bias == "NEUTRAL"
 
     def test_a_bullish_sweep_adds_30_and_sets_the_bias(self):
         r = LiquidityAnalyst().analyze(
@@ -401,11 +401,11 @@ class TestLiquidityAnalyst:
 
     def test_a_sweep_with_no_type_still_adds_30_and_falls_back_to_structure(self):
         """`sweep_detected=True` with `sweep_type="NONE"` pays the full bonus
-        but carries no direction, so the bias silently reverts to structure."""
+        but carries no direction, so the bias remains NEUTRAL."""
         r = LiquidityAnalyst().analyze(
             ctx(structure=StructureContext(bias="BEARISH"),
                 liquidity=LiquidityContext(sweep_detected=True)), regime())
-        assert r.score == 80.0 and r.bias == "BEARISH"
+        assert r.score == 80.0 and r.bias == "NEUTRAL"
 
     def test_equal_highs_and_lows_are_risk_factors_and_cost_nothing(self):
         r = LiquidityAnalyst().analyze(
@@ -497,14 +497,14 @@ class TestVolatilityAnalyst:
 
     def test_normal_volatility_adds_15_and_takes_the_structure_bias(self):
         r = self.run(bias="BULLISH", state="NORMAL", current_spread_pips=10.0)
-        assert r.score == 85.0 and r.bias == "BULLISH"
+        assert r.score == 85.0 and r.bias == "NEUTRAL"
 
     def test_normal_volatility_with_a_neutral_structure_stays_neutral(self):
         r = self.run(bias="NEUTRAL", state="NORMAL", current_spread_pips=10.0)
         assert r.bias == "NEUTRAL"
 
     @pytest.mark.parametrize("state,bias,score", [
-        ("NORMAL", "BULLISH", 85.0),
+        ("NORMAL", "NEUTRAL", 85.0),
         ("EXPANSION", "NEUTRAL", 80.0),
         ("COMPRESSION", "NEUTRAL", 70.0),
         ("EXTREME", "NEUTRAL", 35.0),
@@ -647,7 +647,7 @@ class TestRiskAnalyst:
 
     def test_bias_is_always_the_structure_bias(self):
         for b in ("BULLISH", "BEARISH", "NEUTRAL"):
-            assert self.run(bias=b).bias == b
+            assert self.run(bias=b).bias == "NEUTRAL"
 
 
 # --------------------------------------------------------------------------

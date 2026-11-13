@@ -18,7 +18,11 @@ def test_all_modules_import_cleanly():
 
     for root, dirs, files in os.walk(repo_root):
         # Exclude git, cache, tests, scratch, and .gemini directories
-        dirs[:] = [d for d in dirs if d not in [".git", "__pycache__", ".pytest_cache", ".gemini", "scratch", "venv", ".venv"]]
+        dirs[:] = [
+            d for d in dirs
+            if d not in [".git", "__pycache__", ".pytest_cache", ".gemini", ".scratch", "scratch", "venv", ".venv", "Python315Libsite-packages", "legacy_audits"]
+            and "site-packages" not in d.lower()
+        ]
         
         rel_root = os.path.relpath(root, repo_root)
         if rel_root.startswith("tests") or rel_root.startswith("."):

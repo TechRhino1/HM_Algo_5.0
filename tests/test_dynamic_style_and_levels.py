@@ -154,7 +154,14 @@ class TestDynamicStyleAndLevels(unittest.TestCase):
         pos_fallback = MagicMock()
         pos_fallback.symbol = "EURUSD"
         pos_fallback.comment = "MANUAL_ORDER"
-        self.assertEqual(pm._extract_position_trade_style(pos_fallback), "SWING")
+        pos_fallback.magic = 0
+        self.assertEqual(pm._extract_position_trade_style(pos_fallback), "DAY_TRADING")
+
+        pos_algo_fallback = MagicMock()
+        pos_algo_fallback.symbol = "EURUSD"
+        pos_algo_fallback.comment = "UNKNOWN_ALGO"
+        pos_algo_fallback.magic = 888999
+        self.assertEqual(pm._extract_position_trade_style(pos_algo_fallback), "SWING")
 
     def test_dynamic_levels_scalp_vs_swing_tp1_and_rr(self):
         """Verify DynamicRiskAndLevelsEngine sets distinct TP1 fast-cash and RR for SCALP vs SWING."""

@@ -78,8 +78,21 @@ class LiquidityEngine:
         latest_low = float(lows[-1])
         opens = df["open"].values if "open" in df.columns else closes
 
-        sl_levels = [recent_sl]
-        sh_levels = [recent_sh]
+        sl_levels = []
+        for s in reversed(swing_lows):
+            p = s[1]
+            if not any(abs(p - x) / max(p, 1e-9) < 0.0005 for x in sl_levels):
+                sl_levels.append(p)
+                if len(sl_levels) >= 5:
+                    break
+
+        sh_levels = []
+        for s in reversed(swing_highs):
+            p = s[1]
+            if not any(abs(p - x) / max(p, 1e-9) < 0.0005 for x in sh_levels):
+                sh_levels.append(p)
+                if len(sh_levels) >= 5:
+                    break
 
         # Institutional Session Liquidity Pools (PDH/PDL and Asian Session Range)
         if include_session_levels and "time" in df.columns and len(df) >= 24:

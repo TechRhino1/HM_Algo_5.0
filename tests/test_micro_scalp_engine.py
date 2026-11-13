@@ -58,7 +58,7 @@ def test_position_monitor_constants():
     # The whole point of the refactor: a late, adaptive breakeven — not 1R.
     assert DEFAULT_BE_TRIGGER_R == 2.0
     assert DEFAULT_FAST_CASH_R == 0.75
-    assert DEFAULT_RUNNER_TRAIL_ATR == 1.2
+    assert DEFAULT_RUNNER_TRAIL_ATR == 1.0
 
 def test_decision_engine_initialization():
     engine = DecisionEngine()

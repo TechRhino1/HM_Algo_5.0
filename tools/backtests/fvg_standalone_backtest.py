@@ -85,7 +85,7 @@ from jarvis.learning.deflated_sharpe import (  # noqa: E402
 )
 from jarvis.learning.sample_weights import SampleUniquenessWeightEngine  # noqa: E402
 from jarvis.market.fair_value_gap import FairValueGapEngine  # noqa: E402
-from tools.deflated_sharpe_report import (  # noqa: E402
+from tools.legacy_audits.deflated_sharpe_report import (  # noqa: E402
     ACCEPT_DSR, PRODUCTION_TP, TP_GRID_DEFAULT,
 )
 

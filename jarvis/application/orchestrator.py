@@ -10,7 +10,7 @@ import threading
 import atexit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Callable, Dict, List, Any, Optional, Tuple
 
 from jarvis.application.state_manager import GLOBAL_STATE
 from jarvis.application.radar_sort import radar_sort_key
@@ -283,6 +283,7 @@ class JarvisOrchestrator:
                 end = event_dt + timedelta(minutes=15)
                 if start <= now <= end:
                     return True
+            return False
         except Exception as exc:
             # Fail CLOSED. The old body swallowed a NameError for months, so
             # every gate call returned False while looking like it had checked
@@ -651,6 +652,7 @@ class JarvisOrchestrator:
             "raw_win_prob": float(decision.raw_win_prob) if isinstance(getattr(decision, "raw_win_prob", None), (int, float)) else None,
             "adversarial_penalty": float(decision.adversarial_penalty) if isinstance(decision.adversarial_penalty, (int, float)) else 0.0,
             "expected_value": float(decision.expected_value) if isinstance(decision.expected_value, (int, float)) else 0.0,
+            "reasoning": {"trade_style": trade_style},
             "ml_features": ml_feat.tolist() if hasattr(ml_feat, "tolist") else list(ml_feat)
         }
 
@@ -700,10 +702,22 @@ class JarvisOrchestrator:
             except Exception:
                 features = None
 
+        recovered_style = None
+        raw_reasoning = row.get("reasoning")
+        if isinstance(raw_reasoning, str):
+            try:
+                raw_reasoning = json.loads(raw_reasoning)
+            except Exception:
+                raw_reasoning = None
+        if isinstance(raw_reasoning, dict):
+            ts_cand = str(raw_reasoning.get("trade_style") or "").upper().strip()
+            if ts_cand:
+                recovered_style = ts_cand
+
         out = {
             "strategy": row.get("strategy") or "UNKNOWN",
             "regime": row.get("regime") or "GLOBAL",
-            "trade_style": "SWING",
+            "trade_style": recovered_style or "SWING",
             "type": row.get("trade_type") or "BUY",
             "entry": entry,
             "sl": sl,
@@ -807,6 +821,12 @@ class JarvisOrchestrator:
         strategy = pending.get("strategy", data.get("strategy", "UNKNOWN")) if pending else data.get("strategy", "UNKNOWN")
         regime_name = pending.get("regime", data.get("regime", "GLOBAL")) if pending else data.get("regime", "GLOBAL")
         trade_style = pending.get("trade_style", data.get("trade_style", "SWING")) if pending else data.get("trade_style", "SWING")
+        if trade_style == "SWING":
+            _cmt_u = str(data.get("comment") or "").upper()
+            if "SCLP" in _cmt_u or "SCALP" in _cmt_u:
+                trade_style = "SCALP"
+            elif "DAY" in _cmt_u or "INTRADAY" in _cmt_u:
+                trade_style = "DAY_TRADING"
 
         # Calculate realized R-multiple.
         #
@@ -964,7 +984,12 @@ class JarvisOrchestrator:
         # data gap registered as a LOSS and could help trip the circuit breaker on
         # losses that were never observed. Withhold the sample instead.
         if is_win is not None:
-            self.circuit_breaker.record_trade_result(is_win == 1, symbol=trade_symbol, regime=regime_name)
+            self.circuit_breaker.record_trade_result(
+                is_win == 1,
+                symbol=trade_symbol,
+                regime=regime_name,
+                r_multiple=r_multiple,
+            )
             risk_eng = getattr(self, "risk_engine", None)
             if risk_eng and hasattr(risk_eng, "loss_cooldown"):
                 risk_eng.loss_cooldown.record_trade_result(
@@ -972,6 +997,7 @@ class JarvisOrchestrator:
                     is_win=(is_win == 1),
                     symbol=trade_symbol,
                     current_date=datetime.now(timezone.utc).date().isoformat(),
+                    r_multiple=r_multiple,
                 )
         if new_equity > 0:
             self.drawdown_guard.update_equity_benchmarks(new_equity, float(data.get("balance", new_equity)))
@@ -1189,13 +1215,14 @@ class JarvisOrchestrator:
         active_sym_positions: List[Any],
         positions: List[Any],
         canonical_sym: str,
-        entry_override: bool = False
+        entry_override: bool = False,
+        pre_authorize_fn: Optional[Callable[[List[Any]], bool]] = None,
     ) -> Tuple[List[Any], List[Any], bool]:
         """
         Institutional Stop-and-Reverse (SAR) Protocol:
         When the AI resolves a high-conviction setup in the OPPOSITE direction of an active trade,
         and the opposing trade is in profit (to bank it) or failing (to cut loss early),
-        closes the opposing trade first and allows the reversal to execute cleanly.
+        pre-verifies authorization, closes the opposing trade, and allows clean reversal execution.
         """
         def _get_pos_side(p: Any) -> str:
             raw = getattr(p, "side", getattr(p, "type", "BUY"))
@@ -1238,19 +1265,29 @@ class JarvisOrchestrator:
         opp_is_day = "DAY" in opp_comment or "INTRADAY" in opp_comment
         new_is_scalp = str(getattr(decision, "trade_style", "")).upper() == "SCALP"
 
-        struct_choch = bool(getattr(getattr(context, "structure", None), "choch", False)) if context else False
-        has_breathing_room = (opp_age_sec >= (60.0 if new_is_scalp else 180.0)) or (opp_r <= -0.50) or struct_choch or (opp_r >= 0.20)
+        has_breathing_room = (opp_age_sec >= (300.0 if new_is_scalp else 600.0)) or (opp_r <= -0.50) or (opp_r >= 0.35)
         horizon_allowed = not (new_is_scalp and (opp_is_swing or opp_is_day))
         conf_val = float(getattr(decision, "model_confidence", 0.0) or 0.0)
         ev_val = float(getattr(decision, "expected_value", 0.0) or 0.0)
         rr_val = float(getattr(decision, "risk_reward_ratio", 0.0) or 0.0)
-        grade_val = getattr(decision, "grade", getattr(decision, "setup_grade", "")) or ""
+        adv_pen = float(getattr(decision, "adversarial_penalty", 0.0) or 0.0)
+        order_type_u = str(getattr(decision, "order_type", "MARKET") or "MARKET").upper()
+        is_market_ready = order_type_u == "MARKET"
+        _sess_obj = getattr(context, "session", None) if context else None
+        _sess_prime = getattr(_sess_obj, "is_prime_session", True) if _sess_obj is not None else True
+        is_prime = _sess_prime if isinstance(_sess_prime, bool) else True
+        min_sar_conf = 0.52 if is_prime else 0.62
+
+        # Never bypass confidence/adversarial/RR hurdles via entry_override; also avoid
+        # closing an active trade at a loss only to submit a speculative resting LIMIT.
         high_conviction = (
-            (conf_val >= 0.48 or entry_override is True or grade_val in ("GRADE_A_PLUS", "GRADE A+", "GRADE_A", "GRADE A", "GRADE_B", "GRADE B"))
-            and ev_val > 0.0
-            and rr_val >= 1.2
+            conf_val >= min_sar_conf
+            and ev_val >= 0.40
+            and rr_val >= 1.50
+            and adv_pen <= 30.0
+            and (is_market_ready or opp_r <= -0.50)
         )
-        opp_is_failing_or_banking = (opp_r >= 0.20) or (opp_r <= -0.15) or struct_choch
+        opp_is_failing_or_banking = (opp_r >= 0.35) or (opp_r <= -0.35)
 
         is_flip_eligible = (
             high_conviction
@@ -1261,7 +1298,16 @@ class JarvisOrchestrator:
         if not is_flip_eligible:
             return active_sym_positions, positions, False
 
-        _flip_action = "PROFIT HARVEST" if opp_r >= 0.20 else ("STOP INVALIDATION" if opp_r <= -0.15 else "STRUCTURAL SHIFT")
+        if pre_authorize_fn is not None:
+            simulated_positions = [p for p in positions if p.ticket != opp_pos.ticket]
+            if not pre_authorize_fn(simulated_positions):
+                logger.info(
+                    "🔄 STOP-AND-REVERSE aborted before closing #%s: incoming %s %s failed pre-authorization.",
+                    opp_pos.ticket, canonical_sym, getattr(decision, "bias", ""),
+                )
+                return active_sym_positions, positions, False
+
+        _flip_action = "PROFIT HARVEST" if opp_r >= 0.35 else "STOP INVALIDATION"
         logger.info(
             f"🔄 STOP-AND-REVERSE ({_flip_action}): High-conviction {getattr(decision, 'bias', 'TRADE')} signal "
             f"({conf_val*100:.1f}%, EV=${ev_val:.2f}) "
@@ -1352,7 +1398,7 @@ class JarvisOrchestrator:
                     # never missed — while the ordinary off-hours chop is
                     # still refused at the score gate, keeping the ledger
                     # finding (off-window gold = bleed) intact.
-                    if not getattr(_prof, "premium_window_exception", False) and not dry_run:
+                    if not getattr(_prof, "premium_window_exception", False):
                         _sym_positions = [
                             p for p in self.state_manager.positions
                             if symbol.upper() in str(p.symbol).upper()
@@ -1373,7 +1419,7 @@ class JarvisOrchestrator:
                             return {
                                 "symbol": symbol,
                                 "trade_style": active_trade_style,
-                                "decision": hold_dec,
+                                "decision": None,
                                 "context": None,
                                 "authorized": False,
                                 "auth_reason": auth_msg,
@@ -1852,13 +1898,42 @@ class JarvisOrchestrator:
 
         # ── Institutional Stop-and-Reverse (SAR) / Position Flip Protocol ───────
         if not dry_run and wants_entry and decision.decision == "EXECUTE":
+            def _cycle_sar_pre_auth(sim_positions: List[Any]) -> bool:
+                if (
+                    not is_exec_style_match
+                    or already_executing
+                    or len(active_sym_pending) >= 1
+                    or (is_session_blackout and not _premium_offwindow_elite)
+                    or self._is_news_blackout(symbol, datetime.now(timezone.utc))
+                    or _premium_cap_refused
+                    or (gov_sym_dir and gov_sym_dir.status == "PAUSED")
+                ):
+                    return False
+                sim_sym_cnt = sum(
+                    1 for p in sim_positions
+                    if (p.symbol == symbol or (symbol == "XAUUSD" and "GOLD" in p.symbol) or canonical_sym in p.symbol.upper())
+                )
+                if (sim_sym_cnt + len(active_sym_pending)) >= 2:
+                    return False
+                pre = self.risk_engine.authorize_execution(
+                    decision, account, sim_positions, sym_info,
+                    current_spread_pips=context.volatility.current_spread_pips,
+                    max_allowed_spread_pips=_spec.max_spread_pips,
+                    context=context,
+                    is_second_trade=(sim_sym_cnt == 1),
+                    pending_orders=all_pending_orders,
+                    entry_authorized_override=entry_override,
+                )
+                return bool(pre.get("authorized"))
+
             active_sym_positions, positions, flipped = self._apply_stop_and_reverse_if_eligible(
                 decision=decision,
                 context=context,
                 active_sym_positions=active_sym_positions,
                 positions=positions,
                 canonical_sym=canonical_sym,
-                entry_override=entry_override
+                entry_override=entry_override,
+                pre_authorize_fn=_cycle_sar_pre_auth,
             )
             if flipped:
                 cooldown_active = False
@@ -2292,45 +2367,6 @@ class JarvisOrchestrator:
 
                 cur_spread = ctx.volatility.current_spread_pips if ctx and hasattr(ctx, "volatility") else _spec.typical_spread_pips
 
-                with self._execution_lock:
-                    already_executing = canonical_sym in self._execution_in_progress
-                    last_exec_time = self._last_execution_time.get(canonical_sym, 0.0)
-                    cooldown_active = (time.time() - last_exec_time) < self._SAME_SYMBOL_COOLDOWN_SEC
-
-                active_sym_positions = [
-                    p for p in positions if (p.symbol == sym or (sym == "XAUUSD" and "GOLD" in p.symbol)
-                                              or canonical_sym in p.symbol.upper())
-                ]
-                all_pending_orders = self.mt5_client.get_pending_orders() if hasattr(self.mt5_client, "get_pending_orders") else []
-                active_sym_pending = [
-                    o for o in all_pending_orders if (((o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")) == sym) or (sym == "XAUUSD" and "GOLD" in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", ""))) or canonical_sym in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")).upper())
-                ]
-
-                # Stop-and-Reverse (SAR) Protocol: If opposing position exists on this symbol, check if eligible to flip
-                active_sym_positions, positions, flipped = self._apply_stop_and_reverse_if_eligible(
-                    decision=decision,
-                    context=ctx,
-                    active_sym_positions=active_sym_positions,
-                    positions=positions,
-                    canonical_sym=canonical_sym,
-                    entry_override=True
-                )
-                if flipped:
-                    cooldown_active = False
-
-                if already_executing:
-                    logger.info(f"Arbiter skipping {canonical_sym}: execution already in progress.")
-                    continue
-                if (len(active_sym_positions) + len(active_sym_pending)) >= 2:
-                    logger.info(f"Arbiter skipping {canonical_sym}: max symbol limit reached ({len(active_sym_positions)} pos, {len(active_sym_pending)} pending).")
-                    continue
-                if len(active_sym_pending) >= 1:
-                    logger.info(f"Arbiter skipping {canonical_sym}: pending order already resting.")
-                    continue
-                if cooldown_active and (len(active_sym_positions) + len(active_sym_pending)) == 0:
-                    logger.info(f"Arbiter skipping {canonical_sym}: cooldown active.")
-                    continue
-
                 decision.decision = "EXECUTE"
 
                 # The calibrated entry policy remains the authority when it has
@@ -2356,6 +2392,68 @@ class JarvisOrchestrator:
                 _arb_entry_override = (
                     None if _arb_entry is None else (bool(_arb_entry.allowed) or _is_elite)
                 )
+
+                with self._execution_lock:
+                    already_executing = canonical_sym in self._execution_in_progress
+                    last_exec_time = self._last_execution_time.get(canonical_sym, 0.0)
+                    cooldown_active = (time.time() - last_exec_time) < self._SAME_SYMBOL_COOLDOWN_SEC
+
+                active_sym_positions = [
+                    p for p in positions if (p.symbol == sym or (sym == "XAUUSD" and "GOLD" in p.symbol)
+                                              or canonical_sym in p.symbol.upper())
+                ]
+                all_pending_orders = self.mt5_client.get_pending_orders() if hasattr(self.mt5_client, "get_pending_orders") else []
+                active_sym_pending = [
+                    o for o in all_pending_orders if (((o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")) == sym) or (sym == "XAUUSD" and "GOLD" in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", ""))) or canonical_sym in (o.get("symbol", "") if isinstance(o, dict) else getattr(o, "symbol", "")).upper())
+                ]
+
+                def _sar_pre_authorize(sim_positions: List[Any]) -> bool:
+                    if already_executing or len(active_sym_pending) >= 1:
+                        return False
+                    if self._is_news_blackout(candidate.symbol, datetime.now(timezone.utc)):
+                        return False
+                    sim_sym_count = sum(
+                        1 for p in sim_positions
+                        if (p.symbol == sym or (sym == "XAUUSD" and "GOLD" in p.symbol) or canonical_sym in p.symbol.upper())
+                    )
+                    if (sim_sym_count + len(active_sym_pending)) >= 2:
+                        return False
+                    pre_auth = self.risk_engine.authorize_execution(
+                        decision, account, sim_positions, sym_info,
+                        current_spread_pips=cur_spread,
+                        max_allowed_spread_pips=_spec.max_spread_pips,
+                        context=ctx,
+                        is_second_trade=(sim_sym_count == 1),
+                        pending_orders=all_pending_orders,
+                        entry_authorized_override=_arb_entry_override,
+                    )
+                    return bool(pre_auth.get("authorized"))
+
+                # Stop-and-Reverse (SAR) Protocol: If opposing position exists on this symbol, check if eligible to flip
+                active_sym_positions, positions, flipped = self._apply_stop_and_reverse_if_eligible(
+                    decision=decision,
+                    context=ctx,
+                    active_sym_positions=active_sym_positions,
+                    positions=positions,
+                    canonical_sym=canonical_sym,
+                    entry_override=True,
+                    pre_authorize_fn=_sar_pre_authorize,
+                )
+                if flipped:
+                    cooldown_active = False
+
+                if already_executing:
+                    logger.info(f"Arbiter skipping {canonical_sym}: execution already in progress.")
+                    continue
+                if (len(active_sym_positions) + len(active_sym_pending)) >= 2:
+                    logger.info(f"Arbiter skipping {canonical_sym}: max symbol limit reached ({len(active_sym_positions)} pos, {len(active_sym_pending)} pending).")
+                    continue
+                if len(active_sym_pending) >= 1:
+                    logger.info(f"Arbiter skipping {canonical_sym}: pending order already resting.")
+                    continue
+                if cooldown_active and (len(active_sym_positions) + len(active_sym_pending)) == 0:
+                    logger.info(f"Arbiter skipping {canonical_sym}: cooldown active.")
+                    continue
 
                 auth_res = self.risk_engine.authorize_execution(
                     decision, account, positions, sym_info,
@@ -2389,6 +2487,13 @@ class JarvisOrchestrator:
 
                     exec_res = None
                     try:
+                        dp_score = float(getattr(candidate, "dynamic_priority_score", 0.0) or 0.0)
+                        if dp_score >= 1.50:
+                            logger.info(
+                                f"💎 Arbiter Super-Priority: {candidate.symbol} selected with Elite Dynamic Profit Score "
+                                f"{dp_score:.2f} (Conduction: {getattr(candidate, 'market_conduction_score', 1.0):.2f}, "
+                                f"Profit Potential: {getattr(candidate, 'profit_potential_score', 1.0):.2f})"
+                            )
                         logger.info(f"🚀 Autonomous Multi-Style Execution dispatched for {candidate.symbol} ({candidate.trade_style})")
                         exec_res = self.execution_engine.execute_decision(decision, lots)
                         if exec_res and exec_res.get("status") in ("FILLED", "PLACED"):

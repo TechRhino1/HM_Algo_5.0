@@ -193,10 +193,13 @@ class DevilAdvocateAnalyst:
                         f"Immediate overhead structural supply collision at {threat_price_level:.2f} "
                         f"({dist_to_res:.1f} pts / {dist_to_res/max(atr_val,1e-6):.2f}R runway) — high rejection risk."
                     )
-            # 2. Dynamic channel boundary penalty (indicator-based warning only, not a hard barrier)
+            # 2. Dynamic channel & trendline boundary penalty (indicator-based warning only, not a hard barrier)
             chan_up = getattr(st, "channel_upper", 0.0)
-            if chan_up > c_price and (chan_up - c_price) < (0.25 * atr_val):
+            dyn_res = getattr(st, "dynamic_resistance_trendline", 0.0)
+            res_boundary = max(chan_up, dyn_res)
+            if res_boundary > c_price and (res_boundary - c_price) < (0.25 * atr_val):
                 penalty_score += 8.0
+                threats.append(f"Immediate dynamic resistance/trendline collision at {res_boundary:.2f}.")
         else:
             # 1. Structural support levels for runway & concrete barriers
             candidate_sup = []
@@ -218,10 +221,13 @@ class DevilAdvocateAnalyst:
                         f"Immediate dynamic support zone collision at {threat_price_level:.2f} "
                         f"({dist_to_sup:.1f} pts / {dist_to_sup/max(atr_val,1e-6):.2f}R runway) — high bounce risk."
                     )
-            # 2. Dynamic channel boundary penalty (indicator-based warning only, not a hard barrier)
+            # 2. Dynamic channel & trendline boundary penalty (indicator-based warning only, not a hard barrier)
             chan_low = getattr(st, "channel_lower", 0.0)
-            if 0 < chan_low < c_price and (c_price - chan_low) < (0.25 * atr_val):
+            dyn_sup = getattr(st, "dynamic_support_trendline", 0.0)
+            sup_boundary = max(chan_low, dyn_sup)
+            if 0 < sup_boundary < c_price and (c_price - sup_boundary) < (0.25 * atr_val):
                 penalty_score += 8.0
+                threats.append(f"Immediate dynamic support/trendline collision at {sup_boundary:.2f}.")
 
         # Critique Confidence based on context quality & data completeness
         critique_conf = round(max(0.40, min(1.0, (context.context_quality / 100.0))), 2)

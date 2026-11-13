@@ -905,6 +905,12 @@ class DynamicRiskAndLevelsEngine:
 
                 tp3_price = round(entry_price + (risk_dist * tp3_mult), digits)
 
+            # Enforce BUY monotonicity: entry_price < tp1_price < tp2_price < tp3_price
+            if tp1_price is None or tp1_price <= entry_price or tp1_price >= tp2_price:
+                tp1_price = round(entry_price + max(pip_size * 5, abs(tp2_price - entry_price) * 0.5), digits)
+            if tp3_price is None or tp3_price <= tp2_price:
+                tp3_price = round(tp2_price + max(pip_size * 5, abs(tp2_price - entry_price) * 0.5), digits)
+
 
 
         elif tentative_bias == "SELL":
@@ -1410,6 +1416,12 @@ class DynamicRiskAndLevelsEngine:
             if tp3_price >= entry_price or tp3_price <= 0:
                 tp3_price = round(max(pip_size * 10, entry_price * 0.25), digits)
 
+            # Enforce SELL monotonicity: entry_price > tp1_price > tp2_price > tp3_price > 0.0
+            if tp1_price is None or tp1_price >= entry_price or tp1_price <= tp2_price:
+                tp1_price = round(entry_price - max(pip_size * 5, abs(entry_price - tp2_price) * 0.5), digits)
+            if tp3_price is None or tp3_price >= tp2_price or tp3_price <= 0:
+                tp3_price = round(max(pip_size * 5, tp2_price - max(pip_size * 5, abs(entry_price - tp2_price) * 0.5)), digits)
+
 
 
         else:
@@ -1621,24 +1633,43 @@ class DynamicRiskAndLevelsEngine:
                     # Bound clamped target distances to realistic asset move ceilings
                     max_inst_pct = 0.20 if is_crypto else (0.05 if is_gold else (0.06 if is_index else 0.035))
                     clamped_tp_dist = min(clamped_tp_dist, inst_entry * max_inst_pct)
+                    tp1_dist = max(pip_size * 5, min(clamped_tp_dist * 0.5, clamped_risk * 1.0))
+                    if tp1_dist >= clamped_tp_dist:
+                        tp1_dist = clamped_tp_dist * 0.6
+                    tp3_dist = max(clamped_tp_dist + pip_size * 10, max(clamped_tp_dist * 1.5, clamped_risk * 3.0))
 
                     if tentative_bias == "BUY":
-                        clamped_tp = round(inst_entry + clamped_tp_dist, digits)
-                        clamped_tp1 = round(inst_entry + min(clamped_risk * 1.2, clamped_tp_dist * 0.5), digits)
-                        clamped_tp2 = clamped_tp
-                        clamped_tp3 = round(inst_entry + min(clamped_risk * 3.5, inst_entry * max_inst_pct * 1.5), digits)
+                        clamped_tp1 = round(inst_entry + tp1_dist, digits)
+                        clamped_tp2 = round(inst_entry + clamped_tp_dist, digits)
+                        clamped_tp3 = round(inst_entry + min(tp3_dist, inst_entry * max_inst_pct * 1.5), digits)
+                        if clamped_tp1 <= inst_entry:
+                            clamped_tp1 = round(inst_entry + pip_size * 5, digits)
+                        if clamped_tp2 <= clamped_tp1:
+                            clamped_tp2 = round(clamped_tp1 + pip_size * 5, digits)
+                        if clamped_tp3 <= clamped_tp2:
+                            clamped_tp3 = round(clamped_tp2 + pip_size * 5, digits)
+                        clamped_tp = clamped_tp2
                     else:
-                        inst_floor = max(pip_size * 10, inst_entry * (1.0 - max_inst_pct))
-                        clamped_tp = round(max(inst_floor, inst_entry - clamped_tp_dist), digits)
-                        if clamped_tp <= inst_floor or clamped_tp >= inst_entry:
-                            clamped_tp = round(max(inst_floor, inst_entry * 0.80), digits)
-                        clamped_tp1 = round(max(inst_floor, inst_entry - min(clamped_risk * 1.2, clamped_tp_dist * 0.5)), digits)
-                        if clamped_tp1 <= 0 or clamped_tp1 >= inst_entry:
-                            clamped_tp1 = round(max(inst_floor, inst_entry * 0.90), digits)
-                        clamped_tp2 = clamped_tp
-                        clamped_tp3 = round(max(inst_floor, inst_entry - min(clamped_risk * 3.5, inst_entry * max_inst_pct * 1.5)), digits)
-                        if clamped_tp3 <= 0 or clamped_tp3 >= inst_entry:
-                            clamped_tp3 = round(max(inst_floor, inst_entry * 0.80), digits)
+                        min_floor = max(pip_size * 10, inst_entry * 0.01)
+                        if inst_entry - tp3_dist < min_floor:
+                            max_avail = inst_entry - min_floor
+                            if max_avail > pip_size * 30:
+                                tp1_dist = max_avail * 0.30
+                                clamped_tp_dist = max_avail * 0.60
+                                tp3_dist = max_avail * 0.95
+
+                        clamped_tp1 = round(max(min_floor + pip_size * 20, inst_entry - tp1_dist), digits)
+                        clamped_tp2 = round(max(min_floor + pip_size * 10, inst_entry - clamped_tp_dist), digits)
+                        clamped_tp3 = round(max(min_floor, inst_entry - tp3_dist), digits)
+
+                        # Enforce strict monotonicity: inst_entry > tp1 > tp2 > tp3 > min_floor
+                        if clamped_tp1 >= inst_entry:
+                            clamped_tp1 = round(inst_entry - pip_size * 5, digits)
+                        if clamped_tp2 >= clamped_tp1:
+                            clamped_tp2 = round(clamped_tp1 - pip_size * 5, digits)
+                        if clamped_tp3 >= clamped_tp2:
+                            clamped_tp3 = round(max(pip_size * 5, clamped_tp2 - pip_size * 5), digits)
+                        clamped_tp = clamped_tp2
                         clamped_tp_dist = abs(inst_entry - clamped_tp)
 
 

@@ -448,6 +448,31 @@ class RiskEngine:
             if not guard.get("passed"):
                 rejection_reasons.extend(guard.get("reasons", []))
 
+            # 7b. Off-Hours Single-Trade Quality Floor (e.g. SYDNEY_PACIFIC dead zone)
+            # Prevents low-confidence (<50%) or heavily penalised counter-trend FX/CFD
+            # entries (e.g. USDJPY conf=0.30, SOLUSD TREND_BULL SELL) from riding overrides.
+            if context is not None and hasattr(context, "session"):
+                _sess = getattr(context, "session", None)
+                _is_prime_sess = getattr(_sess, "is_prime_session", True)
+                _is_crypto_sym = (
+                    getattr(resolve_symbol(symbol), "asset_class", "").upper() == "CRYPTO"
+                    or any(k in symbol.upper() for k in ("BTC", "ETH", "SOL"))
+                )
+                if isinstance(_is_prime_sess, bool) and not _is_prime_sess:
+                    _conf_v = float(getattr(decision, "model_confidence", 0.0) or 0.0)
+                    _adv_v = float(getattr(decision, "adversarial_penalty", 0.0) or 0.0)
+                    _min_off_conf = 0.50
+                    if (not _is_crypto_sym or _adv_v > 32.0) and _conf_v < _min_off_conf:
+                        rejection_reasons.append(
+                            f"OFF_HOURS_QUALITY_GATE: Off-session {symbol} confidence "
+                            f"({_conf_v*100:.1f}%) below {_min_off_conf*100:.0f}% floor."
+                        )
+                    elif _adv_v > 32.0 and _conf_v < 0.62:
+                        rejection_reasons.append(
+                            f"OFF_HOURS_ADVERSARIAL_GATE: Off-session adversarial penalty "
+                            f"(-{_adv_v:.1f} pts) requires >=62% confidence (got {_conf_v*100:.1f}%)."
+                        )
+
             # 8. Cross-Asset Directional Correlation check with Dynamic Risk Sizing
             target_side = getattr(decision, "bias", "BUY").upper()
             corr_scaling_factor = 1.0

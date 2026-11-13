@@ -470,7 +470,7 @@ SYMBOL_PROFILES: Dict[str, SymbolProfileConfig] = {
         fast_cash_volume_pct=0.50,
         be_trigger_r=1.20,                     # Move to breakeven quickly at 1.20R
         runner_trail_atr=2.00,
-        session_restriction=False,
+        session_restriction=True,
         # Prime trading window: London + NY (07:00 to 18:00 UTC)
         # Filters low-liquidity overnight chop while keeping elite setups via premium exception
         allowed_utc_hours=(7, 18),
@@ -705,7 +705,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=1.10,
                 runner_trail_atr=1.20,
                 trail_activation_r=1.40,
-                time_stop_minutes=45.0,
+                time_stop_minutes=90.0,
                 milestones=[(0.8, 0.0), (1.0, 0.35), (1.2, 0.60), (1.5, 0.90), (2.0, 1.40)]
             )
         elif is_crypto:
@@ -720,7 +720,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=1.20,
                 runner_trail_atr=1.20,
                 trail_activation_r=1.40,
-                time_stop_minutes=60.0,
+                time_stop_minutes=90.0,
                 milestones=[(0.8, 0.0), (1.0, 0.35), (1.2, 0.60), (1.5, 0.90), (2.0, 1.40)]
             )
         elif is_index:
@@ -735,7 +735,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=1.15,
                 runner_trail_atr=1.00,
                 trail_activation_r=1.40,
-                time_stop_minutes=60.0,
+                time_stop_minutes=90.0,
                 milestones=[(0.8, 0.0), (1.0, 0.35), (1.2, 0.60), (1.5, 0.90), (2.0, 1.40)]
             )
         else:  # Forex & general commodities
@@ -750,7 +750,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=1.10,
                 runner_trail_atr=0.90,
                 trail_activation_r=1.30,
-                time_stop_minutes=60.0,
+                time_stop_minutes=90.0,
                 milestones=[(0.8, 0.0), (1.0, 0.35), (1.2, 0.60), (1.5, 0.90), (2.0, 1.40)]
             )
 
@@ -769,7 +769,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=cfg.be_trigger_r,                # 1.20
                 runner_trail_atr=1.80,
                 trail_activation_r=1.80,
-                time_stop_minutes=75.0,
+                time_stop_minutes=240.0,
                 milestones=[(1.0, -0.20), (1.1, 0.15), (1.5, 0.40), (2.0, 0.80), (3.0, 1.60)]
             )
         elif is_crypto:
@@ -784,7 +784,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=1.40,
                 runner_trail_atr=1.60,
                 trail_activation_r=1.80,
-                time_stop_minutes=120.0,
+                time_stop_minutes=360.0,
                 milestones=[(1.0, -0.20), (1.2, 0.20), (1.5, 0.50), (2.0, 0.90), (3.0, 1.80)]
             )
         elif is_index:
@@ -799,7 +799,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=1.60,
                 runner_trail_atr=1.50,
                 trail_activation_r=1.80,
-                time_stop_minutes=180.0,
+                time_stop_minutes=300.0,
                 milestones=[(1.0, -0.20), (1.4, 0.30), (1.8, 0.70), (2.5, 1.30), (3.5, 2.20)]
             )
         else:  # Forex & general
@@ -814,7 +814,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=1.50,
                 runner_trail_atr=1.30,
                 trail_activation_r=1.60,
-                time_stop_minutes=120.0,
+                time_stop_minutes=300.0,
                 milestones=[(1.0, -0.20), (1.4, 0.30), (1.8, 0.70), (2.5, 1.30), (3.5, 2.20)]
             )
 
@@ -832,7 +832,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=2.00,
                 runner_trail_atr=cfg.runner_trail_atr,        # 2.00
                 trail_activation_r=2.00,
-                time_stop_minutes=240.0,
+                time_stop_minutes=720.0,
                 milestones=[(1.2, -0.30), (1.8, 0.40), (2.2, 0.80), (3.0, 1.50), (4.5, 3.00)]
             )
         elif is_crypto:
@@ -847,7 +847,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=2.00,
                 runner_trail_atr=cfg.runner_trail_atr,        # 1.80
                 trail_activation_r=2.00,
-                time_stop_minutes=360.0,
+                time_stop_minutes=960.0,
                 milestones=[(1.2, -0.30), (1.8, 0.40), (2.2, 0.80), (3.0, 1.50), (4.5, 3.00)]
             )
         elif is_index:
@@ -862,7 +862,7 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=2.20,
                 runner_trail_atr=2.00,
                 trail_activation_r=2.20,
-                time_stop_minutes=480.0,
+                time_stop_minutes=960.0,
                 milestones=[(1.2, -0.30), (1.8, 0.40), (2.2, 0.80), (3.0, 1.50), (4.5, 3.00)]
             )
         else:  # Forex & general
@@ -877,6 +877,6 @@ def get_style_profile(symbol: str, trade_style: str = "SWING") -> StyleProfile:
                 be_trigger_r=cfg.be_trigger_r,                # 1.80
                 runner_trail_atr=cfg.runner_trail_atr,        # 2.00
                 trail_activation_r=2.00,
-                time_stop_minutes=240.0,
+                time_stop_minutes=720.0,
                 milestones=[(1.2, -0.30), (1.8, 0.40), (2.2, 0.80), (3.0, 1.50), (4.5, 3.00)]
             )

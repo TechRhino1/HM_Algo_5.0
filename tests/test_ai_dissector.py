@@ -415,7 +415,7 @@ class TestRiskReward:
         assert dissect(ctx(), rr=rr)["scores"]["risk_reward"] == expected
 
     @pytest.mark.parametrize("ev,expected", [(0.0, 0), (-1.0, 0), (0.5, 1), (1.0, 3),
-                                             (4.9, 3), (5.0, 5), (100.0, 5)])
+                                             (1.4, 3), (1.5, 5), (5.0, 5), (100.0, 5)])
     def test_ev_bands(self, ev, expected):
         assert dissect(ctx(), ev=ev)["scores"]["risk_reward"] == expected
 

@@ -42,6 +42,9 @@ class CandidateOpportunity:
     is_actionable: bool
     decision_obj: Optional[Any] = None
     context: Optional[Any] = None
+    market_conduction_score: float = 1.0
+    profit_potential_score: float = 1.0
+    dynamic_priority_score: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = self.decision_obj
@@ -69,6 +72,9 @@ class CandidateOpportunity:
             "regime": self.regime,
             "regime_multiplier": self.regime_multiplier,
             "utility_score": self.utility_score,
+            "market_conduction_score": self.market_conduction_score,
+            "profit_potential_score": self.profit_potential_score,
+            "dynamic_priority_score": self.dynamic_priority_score,
             "setup_grade": self.setup_grade,
             "is_actionable": self.is_actionable,
         }
@@ -140,6 +146,9 @@ class CandidateOpportunity:
             "mtf_alignment": getattr(ctx, "mtf_alignment", {}) if ctx else {},
             "mtf_confluence": getattr(ctx, "mtf_confluence_score", 0.0) if ctx else 0.0,
             "utility_score": self.utility_score,
+            "market_conduction_score": round(self.market_conduction_score, 2),
+            "profit_potential_score": round(self.profit_potential_score, 2),
+            "dynamic_priority_score": round(self.dynamic_priority_score, 4),
             "setup_grade": self.setup_grade,
             "is_actionable": self.is_actionable,
         }
@@ -216,6 +225,188 @@ class UniversalOpportunityArbiter:
                 logger.debug(f"Self-learning regime multiplier unavailable for {reg_upper}: {e}")
 
         return round(float(mult), 3)
+
+    def calculate_market_conduction(
+        self,
+        symbol: str,
+        context: Optional[MarketContext],
+        decision_obj: Optional[DecisionObject] = None,
+        style: str = "SWING"
+    ) -> float:
+        """
+        Evaluates dynamic market conduction: how cleanly and efficiently the market
+        structure transmits price movement toward profit targets.
+        Factors:
+        - Trend velocity & strength (ADX >= 25)
+        - Volatility expansion vs compression/extreme
+        - Spread-to-risk friction impedance
+        - Optimal Pricing Zone (OTE discount for BUY, premium for SELL)
+        - Peak session volume liquidity
+        - Intermarket / SMT confirmation
+        Returns a conduction multiplier in [0.50, 1.50], defaulting to 1.0 when context is absent.
+        """
+        if context is None:
+            return 1.0
+
+        conduction = 1.0
+        bias = str(getattr(decision_obj, "bias", "") or (getattr(context, "structure", None) and getattr(context.structure, "bias", "")) or "").upper()
+
+        # 1. Trend Velocity & Momentum Conduction (ADX & Trend Score)
+        momentum = getattr(context, "momentum", None)
+        if momentum is not None:
+            adx_val = float(getattr(momentum, "adx", 0.0) or 0.0)
+            trend_sc = float(getattr(momentum, "trend_score", 0.0) or 0.0)
+
+            if adx_val >= 30.0:
+                conduction += 0.15  # Pristine institutional trending velocity
+            elif adx_val >= 22.0:
+                conduction += 0.08  # Healthy directional conduction
+            elif 0.0 < adx_val < 18.0:
+                conduction -= 0.10  # Sluggish chop / consolidation drag
+
+            # Directional alignment bonus
+            if bias == "BUY" and trend_sc >= 35.0:
+                conduction += 0.08
+            elif bias == "SELL" and trend_sc <= -35.0:
+                conduction += 0.08
+            elif (bias == "BUY" and trend_sc < -20.0) or (bias == "SELL" and trend_sc > 20.0):
+                conduction -= 0.15  # Counter-momentum friction
+
+        # 2. Volatility State & Expansion Conduction
+        volatility = getattr(context, "volatility", None)
+        if volatility is not None:
+            vol_state = str(getattr(volatility, "state", "NORMAL")).upper()
+            if vol_state == "EXPANSION":
+                conduction += 0.10  # Volatility expansion rapidly conducts price to targets
+            elif vol_state == "NORMAL":
+                conduction += 0.05
+            elif vol_state == "COMPRESSION":
+                conduction -= 0.05  # Energy coiling, slower initial conduction
+            elif vol_state in ("EXTREME", "HIGH_VOLATILITY"):
+                conduction -= 0.18  # Hazardous whipsaw risk
+
+            if getattr(volatility, "volatility_spike_breaker", False):
+                conduction -= 0.25
+
+            # 3. Spread-to-Risk Friction Impedance
+            cur_spread = float(getattr(volatility, "current_spread_pips", 0.0) or 0.0)
+            entry_p = float(getattr(decision_obj, "entry_price", 0.0) or 0.0) if decision_obj else 0.0
+            sl_p = float(getattr(decision_obj, "stop_loss", 0.0) or 0.0) if decision_obj else 0.0
+            risk_dist = abs(entry_p - sl_p)
+            if cur_spread > 0 and risk_dist > 1e-9:
+                from jarvis.data.symbol_registry import resolve as resolve_symbol
+                try:
+                    spec = resolve_symbol(symbol)
+                    pip_sz = getattr(spec, "pip_size", 0.0001) or 0.0001
+                    friction_ratio = (cur_spread * pip_sz) / risk_dist
+                    if friction_ratio <= 0.06:
+                        conduction += 0.10  # Ultra-clean price conduction: broker spread takes <6% of risk
+                    elif friction_ratio <= 0.12:
+                        conduction += 0.05
+                    elif friction_ratio >= 0.30:
+                        conduction -= 0.20  # High drag: spread consumes >30% of stop distance
+                except Exception:
+                    pass
+
+        # 4. Optimal Pricing Zone (OTE) Structural Conduction
+        structure = getattr(context, "structure", None)
+        if structure is not None:
+            zone = str(getattr(structure, "discount_premium_zone", "")).upper()
+            if bias == "BUY" and ("DISCOUNT" in zone or "EQUILIBRIUM" in zone):
+                conduction += 0.10  # Buying low allows full structural expansion upward
+            elif bias == "SELL" and ("PREMIUM" in zone or "EQUILIBRIUM" in zone):
+                conduction += 0.10  # Selling high allows full structural expansion downward
+            elif (bias == "BUY" and "PREMIUM" in zone) or (bias == "SELL" and "DISCOUNT" in zone):
+                conduction -= 0.15  # Buying expensive or selling cheap into structural barrier
+
+        # 5. Session Volume & Institutional Liquidity Conduction
+        session = getattr(context, "session", None)
+        if session is not None:
+            is_prime = getattr(session, "is_prime_session", False)
+            if is_prime:
+                conduction += 0.10  # Deep institutional order book conducts price cleanly
+            else:
+                is_crypto = any(c in symbol.upper() for c in ("BTC", "ETH", "SOL", "CRYPTO"))
+                if not is_crypto:
+                    conduction -= 0.08  # Off-session thin liquidity drag
+
+        # 6. Intermarket & SMT Macro Confluence
+        dxy_info = getattr(context, "intermarket_dxy", {}) or {}
+        if isinstance(dxy_info, dict) and dxy_info.get("is_live"):
+            gold_asset = any(g in symbol.upper() for g in ("XAU", "GOLD"))
+            if gold_asset and bias == "BUY" and "CONFIRMS_BUY" in str(dxy_info.get("gold_impact", "")).upper():
+                conduction += 0.08
+            elif gold_asset and bias == "SELL" and "CONFIRMS_SELL" in str(dxy_info.get("gold_impact", "")).upper():
+                conduction += 0.08
+
+        return round(float(np.clip(conduction, 0.50, 1.50)), 3)
+
+    def calculate_profit_potential(
+        self,
+        expected_value: float,
+        rr_ratio: float,
+        win_prob: float,
+        symbol: str,
+        context: Optional[MarketContext] = None,
+        decision_obj: Optional[DecisionObject] = None
+    ) -> float:
+        """
+        Quantifies dynamic profit potential based on:
+        - Expected Value in R (EV_R) and dollar expectancy (EV_$)
+        - Structural risk/reward asymmetry (RR >= 2.0 to 4.0)
+        - Model win probability
+        - ATR expansion capacity
+        Returns a profit potential multiplier in [0.50, 2.50], defaulting to 1.0 when context is absent.
+        """
+        ev_clamped = max(0.0, float(expected_value or 0.0))
+        rr_clamped = max(1.0, float(rr_ratio or 1.5))
+
+        # 1. Expected Value Scaling
+        if ev_clamped >= 2.0:
+            ev_factor = 1.35
+        elif ev_clamped >= 1.2:
+            ev_factor = 1.20
+        elif ev_clamped >= 0.8:
+            ev_factor = 1.10
+        elif ev_clamped >= 0.4:
+            ev_factor = 1.00
+        else:
+            ev_factor = 0.85
+
+        # 2. Risk/Reward Asymmetry Factor
+        if rr_clamped >= 3.5:
+            rr_factor = 1.25
+        elif rr_clamped >= 2.5:
+            rr_factor = 1.15
+        elif rr_clamped >= 2.0:
+            rr_factor = 1.05
+        else:
+            rr_factor = 0.90
+
+        # 3. Dollar Expectancy Check
+        dollar_ev = float(getattr(decision_obj, "expected_value_dollars", 0.0) or 0.0) if decision_obj else 0.0
+        dollar_boost = 1.0
+        if dollar_ev > 10.0:
+            dollar_boost = 1.10
+        elif dollar_ev > 5.0:
+            dollar_boost = 1.05
+        elif dollar_ev < 0.0:
+            dollar_boost = 0.85
+
+        # 4. Volatility Expansion Capacity (ATR / Price ratio)
+        atr_boost = 1.0
+        if context is not None:
+            vol = getattr(context, "volatility", None)
+            cur_p = getattr(context, "current_price", 0.0) or 1.0
+            if vol is not None and getattr(vol, "atr", 0.0) > 0 and cur_p > 0:
+                atr_pct = (vol.atr / cur_p) * 100.0
+                if atr_pct >= 2.0:
+                    atr_boost = 1.10  # High expansion capacity (e.g. Crypto/Metals in expansion)
+                elif atr_pct >= 0.8:
+                    atr_boost = 1.05
+
+        profit_score = ev_factor * rr_factor * dollar_boost * atr_boost
+        return round(float(np.clip(profit_score, 0.50, 2.50)), 3)
 
     def evaluate_opportunity(
         self,
@@ -567,6 +758,26 @@ class UniversalOpportunityArbiter:
                     f"0.01 lot planned risk ${planned_risk_usd:.2f} exceeds nano ceiling ${max_risk_usd:.2f}"
                 )
 
+        # Dynamic Market Conduction & High-Profit Priority Analysis
+        market_conduction_score = self.calculate_market_conduction(
+            symbol=symbol,
+            context=context,
+            decision_obj=decision_obj,
+            style=style_norm
+        )
+        profit_potential_score = self.calculate_profit_potential(
+            expected_value=effective_ev,
+            rr_ratio=rr_ratio,
+            win_prob=win_prob_pct,
+            symbol=symbol,
+            context=context,
+            decision_obj=decision_obj
+        )
+        dynamic_priority_score = round(
+            float(utility_score * market_conduction_score * profit_potential_score),
+            4
+        )
+
         return CandidateOpportunity(
             symbol=symbol,
             trade_style=style_norm,
@@ -590,7 +801,10 @@ class UniversalOpportunityArbiter:
             setup_grade=setup_grade,
             is_actionable=is_actionable,
             decision_obj=decision_obj,
-            context=context
+            context=context,
+            market_conduction_score=market_conduction_score,
+            profit_potential_score=profit_potential_score,
+            dynamic_priority_score=dynamic_priority_score,
         )
 
     def rank_and_select_best(
@@ -598,26 +812,37 @@ class UniversalOpportunityArbiter:
         candidates: List[CandidateOpportunity]
     ) -> Tuple[Optional[CandidateOpportunity], List[CandidateOpportunity]]:
         """
-        Ranks all candidate opportunities by utility score descending.
+        Ranks all candidate opportunities by dynamic profit priority and utility score descending.
         Selects the best actionable Grade A/A+ opportunity.
         Returns (best_actionable_opportunity, ranked_list).
         """
         if not candidates:
             return None, []
 
-        # 2026-10-20 gold priority: actionable Grade A+/A candidates from
-        # premium-window profiles (XAUUSD) rank ahead of every other
-        # instrument's candidates. Within each priority group the order is
-        # still pure utility. A competing FX candidate with a higher raw
-        # utility can now lose the dispatch order to an elite gold setup —
-        # the user directive is that the always-on gold radar's best entry
-        # is taken first; risk controls (concurrent-exposure, reserved
-        # quota) still cap anything that would over-allocation-wise fire.
+        # Dynamic Market Conduction & Profit Priority Ranking:
+        # Candidates with elite dynamic market conduction and superior profit expectancy
+        # are hoisted to Super-Priority Tier 0 regardless of asset class.
+        # Within each priority tier, candidates are ordered by dynamic priority score,
+        # utility, win probability, confluence, and expected value.
+        # When dynamic context is absent (e.g. synthetic test fixtures), the ranking
+        # cleanly falls back to the baseline profile priority (XAUUSD -> BTC/ETH -> FX/Indices).
         def _priority_bucket(c: CandidateOpportunity) -> int:
             sym_upper = str(getattr(c, "symbol", "")).upper()
             is_act = getattr(c, "is_actionable", False)
             grade = getattr(c, "setup_grade", "")
             if is_act and grade in ("GRADE A+", "GRADE A"):
+                dyn_prio = float(getattr(c, "dynamic_priority_score", 0.0) or 0.0)
+                mkt_cond = float(getattr(c, "market_conduction_score", 1.0) or 1.0)
+                ev_val = float(getattr(c, "expected_value", 0.0) or 0.0)
+
+                # ELITE DYNAMIC PROFIT OPPORTUNITY (Super-Priority Tier 0):
+                # When dynamic analysis confirms exceptional market conduction (>= 1.05),
+                # robust expected value (>= 0.80R), and high dynamic priority score (>= 1.50),
+                # hoist the candidate to Super-Priority Bucket 0 regardless of asset class!
+                if dyn_prio >= 1.50 and mkt_cond >= 1.05 and ev_val >= 0.80:
+                    return 0
+
+                # Baseline profile fallback when dynamic context is absent or standard:
                 if "XAU" in sym_upper or "GOLD" in sym_upper:
                     return 0
                 if "BTC" in sym_upper or "ETH" in sym_upper:
@@ -629,6 +854,7 @@ class UniversalOpportunityArbiter:
             candidates,
             key=lambda c: (
                 _priority_bucket(c),
+                -getattr(c, "dynamic_priority_score", c.utility_score),
                 -c.utility_score,
                 -c.win_prob,
                 -c.confluence_score,

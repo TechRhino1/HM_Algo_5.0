@@ -1,5 +1,5 @@
 import logging
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional
 
 logger = logging.getLogger("JARVIS_LossCooldown")
 
@@ -39,7 +39,14 @@ class LossCooldownManager:
         # Injectable clock for backtest (bar time) vs live (wall time)
         self._clock = None
 
-    def record_trade_result(self, pnl: float, is_win: bool, symbol: str = "", current_date=None) -> None:
+    def record_trade_result(
+        self,
+        pnl: float,
+        is_win: bool,
+        symbol: str = "",
+        current_date=None,
+        r_multiple: Optional[float] = None,
+    ) -> None:
         """Record trade outcome and update streak tracking."""
         import time
         if current_date is not None and current_date != self.current_date:
@@ -65,6 +72,12 @@ class LossCooldownManager:
                 self.cooldown_expiry_by_symbol.pop(sym_key, None)
                 self.cooldown_bars_by_symbol.pop(sym_key, None)
         else:
+            if r_multiple is not None and -0.15 < float(r_multiple) <= 0.0:
+                logger.info(
+                    "LossCooldownManager: ignoring near-flat scratch exit for %s (R=%.2f > -0.15R).",
+                    sym_key or "UNKNOWN", float(r_multiple),
+                )
+                return
             self.consecutive_losses += 1
             self.consecutive_wins = 0
             if sym_key:

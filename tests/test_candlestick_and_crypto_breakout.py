@@ -78,7 +78,7 @@ def test_liquidity_sweep_lookback_retention():
     df = pd.DataFrame({
         "high": highs, "low": lows, "close": closes, "open": opens, "volume": vols
     })
-    res = engine.analyze_liquidity(df)
+    res = engine.analyze_liquidity(df, lookback_bars=10)
     assert res.sweep_detected is True
     assert res.sweep_type == "BULLISH_SWEEP"
     assert res.bars_since_sweep >= 0

@@ -131,7 +131,7 @@ class TestSelfLearningReadsWhatItSays:
         conn.close()
 
         engine = SelfLearningEngine(db_path=str(db))
-        assert engine.get_regime_multiplier("TREND_BULL", lookback=50) == 0.90
+        assert engine.get_regime_multiplier("TREND_BULL", lookback=50) == 0.95
 
     def test_it_boosts_when_the_regime_actually_wins(self, db):
         conn = sqlite3.connect(str(db))

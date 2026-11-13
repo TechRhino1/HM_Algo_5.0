@@ -50,9 +50,9 @@ class TestInstitutionalEntryAndLotSizingFixes(unittest.TestCase):
         ctx = MarketContext(
             symbol="XAUUSD",
             timestamp=datetime(2026, 9, 3, 14, 0, tzinfo=timezone.utc),
-            current_price=2400.0,
-            bid=2399.8,
-            ask=2400.2,
+            current_price=2395.0,
+            bid=2394.8,
+            ask=2395.2,
             structure=StructureContext(
                 bias="BULLISH",
                 demand_zone=(2390.0, 2393.0),
@@ -94,6 +94,7 @@ class TestInstitutionalEntryAndLotSizingFixes(unittest.TestCase):
             demand_zone=(2385.0, 2390.0),
             channel_lower=2388.0,
             channel_upper=2400.0,
+            discount_premium_zone="PREMIUM",
         )
         setattr(st, "swing_low", 2388.0)
         setattr(st, "swing_high", 2400.0)

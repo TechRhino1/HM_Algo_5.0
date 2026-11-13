@@ -198,13 +198,9 @@ class MacroAnalyst(BaseAnalyst):
                 score += 20.0
                 evidence.append(f"Macro Directional Forecast: Weaker USD triggers SELL bias on {sym}.")
 
-        # 3b. No macro shock: fall back to structure bias if present
+        # 3b. No macro shock: remain NEUTRAL
         if bias == "NEUTRAL" and not usd_bull_shock and not usd_bear_shock:
-            if context.structure and getattr(context.structure, "bias", "NEUTRAL") != "NEUTRAL":
-                bias = context.structure.bias
-                evidence.append(f"No macro shock detected; aligning with {bias} structure bias.")
-            else:
-                evidence.append("Macro: No active macro news shocks detected — remaining NEUTRAL.")
+            evidence.append("Macro: No active macro news shocks detected — remaining NEUTRAL.")
 
         # 4. Check regime event risk / blackout window
         if regime.primary_regime.value == "EVENT_RISK":

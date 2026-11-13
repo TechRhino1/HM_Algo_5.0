@@ -86,13 +86,15 @@ def get_max_lot_cap(equity: float, symbol: str = "") -> float:
     sym = (symbol or "").upper()
     is_gold = "XAU" in sym or "GOLD" in sym
 
-    if eq < 150.0:
-        # Gold restricted to 0.01 lot floor on sub-$150 accounts; Forex allowed 0.02 lots on tight stops
-        return 0.01 if is_gold else 0.02
+    if eq < 100.0:
+        return 0.01
+    elif eq <= 150.0:
+        # Gold and unspecified symbol default to 0.01 floor; explicit Forex allowed 0.02 lots
+        return 0.01 if (is_gold or not sym) else 0.02
     elif eq < 250.0:
         # Gold unlocked for 0.02 lot multi-target split; Forex allowed up to 0.03 lots
-        return 0.02 if is_gold else 0.03
-    elif eq < 500.0:
+        return 0.02 if (is_gold or not sym) else 0.03
+    elif eq <= 500.0:
         return 0.05  # Enforce max 0.05 lots on $250-$500 micro accounts
     elif eq < 1000.0:
         return 0.10

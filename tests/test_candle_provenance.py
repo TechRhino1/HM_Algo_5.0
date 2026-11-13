@@ -46,11 +46,12 @@ def _bars(n=120, start=100.0):
     return out
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def no_real_feed(monkeypatch):
-    """`generate_candles` asks MT5 first; keep every test off the broker."""
+    """`generate_candles` asks MT5/exchange first; keep tests off real network feeds."""
     import jarvis.data.market_data_provider as mdp
     monkeypatch.setattr(mdp, "_try_mt5", lambda *a, **k: None)
+    monkeypatch.setattr(mdp, "fetch_real_candles", lambda *a, **k: None)
 
 
 # ---------------------------------------------------------------------------

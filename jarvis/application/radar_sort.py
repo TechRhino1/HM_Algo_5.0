@@ -40,7 +40,8 @@ def radar_sort_key(item: Dict[str, Any]) -> Tuple[int, int, float, Any, Any]:
         conv = 1
     else:
         conv = 0
-    util = float(item.get("utility_score", 0.0) or 0.0)
+    dyn_prio = float(item.get("dynamic_priority_score", 0.0) or 0.0)
+    util = dyn_prio if dyn_prio > 0.0 else float(item.get("utility_score", 0.0) or 0.0)
     prob = item.get("win_prob", 0) or item.get("score", 0) or 0
     ev = item.get("ev", 0) or 0
     return (is_open, conv, util, prob, ev)

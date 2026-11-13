@@ -74,9 +74,9 @@ class TestMultiStyleRadar(unittest.TestCase):
         """Verify _orchestration_loop_single_pass populates radar across SWING, DAY_TRADING, and SCALP."""
         radar_results = self.orchestrator._orchestration_loop_single_pass()
         
-        # 2 symbols * 3 styles = 6 opportunities
-        self.assertEqual(len(radar_results), 6)
-        self.assertEqual(len(self.orchestrator.state_manager.radar_opportunities), 6)
+        # 2 symbols * 5 styles = 10 opportunities
+        self.assertEqual(len(radar_results), 10)
+        self.assertEqual(len(self.orchestrator.state_manager.radar_opportunities), 10)
 
         styles_found = {o["trade_style"] for o in radar_results}
         self.assertIn("SWING", styles_found)

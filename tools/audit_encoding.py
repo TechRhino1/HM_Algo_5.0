@@ -56,7 +56,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {
     ".git", "node_modules", "__pycache__", ".scratch", ".venv", "venv",
     "dist", "build", ".mypy_cache", ".pytest_cache", ".idea", ".vscode",
-    ".workbuddy-ai",
+    ".workbuddy-ai", "site-packages", "Python315Libsite-packages",
 }
 
 # File types that are served to a browser or executed.
@@ -119,7 +119,12 @@ def find_in_line(line: str):
 def iter_files(include_docs: bool):
     exts = CODE_EXTS | DOC_EXTS if include_docs else CODE_EXTS
     for dirpath, dirnames, filenames in os.walk(ROOT):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in SKIP_DIRS
+            and not d.startswith(".")
+            and "site-packages" not in d.lower()
+        ]
         for fn in sorted(filenames):
             if os.path.splitext(fn)[1].lower() in exts:
                 yield os.path.join(dirpath, fn)

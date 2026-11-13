@@ -51,11 +51,13 @@ def test_news_disk_cache_persistence_and_hydration(tmp_path):
     assert organized[0]["event"] == "US Non-Farm Payrolls"
 
 
-def test_429_survives_via_disk_cache(tmp_path):
-    """When FairEconomy is rate-limited (429), disk cache ensures real news is still served."""
+def test_429_survives_via_disk_cache(tmp_path, monkeypatch):
+    """When FairEconomy is rate-limited (429) and live feeds are down, disk cache ensures real news is still served."""
     cache_file = str(tmp_path / "test_news_cache_429.json")
     engine = LiveNewsEngine()
     engine.DISK_CACHE_PATH = cache_file
+    monkeypatch.setattr(engine, "_fetch_biquote_feed", lambda: [])
+    monkeypatch.setattr(engine, "_fetch_myfxbook_feed", lambda: [])
     
     # Pre-populate disk cache with a real release
     real_time = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()

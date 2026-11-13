@@ -153,12 +153,12 @@ class ExitPolicy:
 
             if is_ranging:
                 # In range/compression: bank early before range boundary bounce, advance BE, tighten trail
+                # Preserve full style time_stop_minutes so slow consolidation has time to resolve.
                 fast_cash_r = min(fast_cash_r, 1.00)
                 fast_cash_vol = max(fast_cash_vol, 0.50)
                 be_trig = min(be_trig, 1.15)
                 runner_trail = min(runner_trail, 1.00)
                 trail_act = min(trail_act, 1.30)
-                time_stop_min = time_stop_min * 0.75
             elif is_trending:
                 # In trending: expand runner trail breathing room, defer partial to let runners ride
                 runner_trail = runner_trail * 1.15
@@ -309,12 +309,22 @@ def evaluate_exit(
     # thesis left — close it and recycle the risk budget. Skipped once a
     # partial has banked (de-risked runner may idle) and skipped while the
     # trailing regime is active (trade is managing itself).
+    # Protect trades that already demonstrated live edge (peak >= +0.15R) or sit at/above
+    # the trail/BE lock from getting flattened on a brief consolidation tick.
+    _peak_r = (
+        float(peak_favorable_dist) / max(risk_dist, 1e-6)
+        if peak_favorable_dist is not None
+        else r_multiple
+    )
     if (
         policy.time_stop_minutes > 0
         and hold_minutes is not None
         and hold_minutes >= policy.time_stop_minutes
         and not partial_already_taken
+        and not be_already_locked
+        and r_multiple < policy.trail_activation_r
         and current_r < max(0.0, policy.time_stop_min_r)  # dead, not merely unlucky
+        and _peak_r < max(0.15, policy.time_stop_min_r + 0.05)
     ):
         dec.close_position = True
         dec.close_reason = (

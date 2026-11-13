@@ -207,7 +207,8 @@ def test_warmup_is_paid_once_per_symbol(monkeypatch, weekday_market):
     assert "GOLD.i#" in engine._warmed
 
     calls_after_first = fake.calls
-    # Different cache key so the TTL cache does not answer for us.
+    # Clear cache so the engine actually queries MT5 again rather than slicing cached bars
+    engine._cache.clear()
     engine.fetch_rates("XAUUSD", "H1", num_bars=11)
     assert fake.calls == calls_after_first + 1, "the warm-up wait was paid twice"
 

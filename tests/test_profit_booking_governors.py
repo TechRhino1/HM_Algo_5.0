@@ -142,14 +142,18 @@ class TestTimeStop(unittest.TestCase):
 
 class TestSymbolProfileTimeStops(unittest.TestCase):
     def test_all_time_stops(self):
-        gold = ExitPolicy.for_symbol("XAUUSD")
-        btc = ExitPolicy.for_symbol("BTCUSD")
-        us30 = ExitPolicy.for_symbol("US30")
-        eurusd = ExitPolicy.for_symbol("EURUSD")
-        self.assertAlmostEqual(gold.time_stop_minutes, 75.0, places=6)
-        self.assertAlmostEqual(btc.time_stop_minutes, 90.0, places=6)
-        self.assertAlmostEqual(us30.time_stop_minutes, 240.0, places=6)
-        self.assertAlmostEqual(eurusd.time_stop_minutes, 120.0, places=6)
+        gold_scalp = ExitPolicy.for_symbol("XAUUSD", trade_style="SCALP")
+        gold_day = ExitPolicy.for_symbol("XAUUSD", trade_style="DAY_TRADING")
+        btc_day = ExitPolicy.for_symbol("BTCUSD", trade_style="DAY_TRADING")
+        us30_day = ExitPolicy.for_symbol("US30", trade_style="DAY_TRADING")
+        eurusd_day = ExitPolicy.for_symbol("EURUSD", trade_style="DAY_TRADING")
+        eurusd_swing = ExitPolicy.for_symbol("EURUSD", trade_style="SWING")
+        self.assertAlmostEqual(gold_scalp.time_stop_minutes, 90.0, places=6)
+        self.assertAlmostEqual(gold_day.time_stop_minutes, 240.0, places=6)
+        self.assertAlmostEqual(btc_day.time_stop_minutes, 360.0, places=6)
+        self.assertAlmostEqual(us30_day.time_stop_minutes, 300.0, places=6)
+        self.assertAlmostEqual(eurusd_day.time_stop_minutes, 300.0, places=6)
+        self.assertAlmostEqual(eurusd_swing.time_stop_minutes, 720.0, places=6)
 
 
 class TestStrategyQuarantine(unittest.TestCase):

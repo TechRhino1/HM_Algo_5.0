@@ -154,6 +154,6 @@ def test_a_blocked_myfxbook_costs_the_fetch_nothing(monkeypatch):
     before = counter.calls
 
     eng._fetch_all_live_sources()
-    # FairEconomy is asked, MyFxBook is not.
-    assert counter.calls - before == 1, (
+    # Biquote and FairEconomy are asked (2 requests), MyFxBook is not.
+    assert counter.calls - before == 2, (
         f"a blocked source was retried: {counter.calls - before} requests")

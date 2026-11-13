@@ -28,9 +28,9 @@ class TestGoldPremiumProfile(unittest.TestCase):
         gold = get_symbol_profile_config("XAUUSD")
         self.assertIsNotNone(gold)
         self.assertTrue(gold.session_restriction)
-        self.assertEqual(gold.allowed_utc_hours, (12, 16))
+        self.assertEqual(gold.allowed_utc_hours, (7, 18))
         self.assertTrue(gold.premium_window_exception)
-        self.assertEqual(gold.premium_out_of_window_min_ai_score, 88.0)
+        self.assertEqual(gold.premium_out_of_window_min_ai_score, 85.0)
 
     def test_other_profiles_default_off(self):
         for sym in ("BTCUSD", "EURUSD", "US30"):

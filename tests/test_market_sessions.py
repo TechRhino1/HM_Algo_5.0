@@ -66,7 +66,7 @@ class TestGetCurrentSession:
             (7, "LONDON"), (9, "LONDON"), (11, "LONDON"),
             (12, "LONDON_NY_OVERLAP"), (14, "LONDON_NY_OVERLAP"), (15, "LONDON_NY_OVERLAP"),
             (16, "NEW_YORK"), (18, "NEW_YORK"), (20, "NEW_YORK"),
-            (21, "OFF_HOURS"), (23, "OFF_HOURS"),
+            (21, "SYDNEY_PACIFIC"), (23, "SYDNEY_PACIFIC"),
         ],
     )
     def test_every_hour_of_the_trading_day_maps_to_one_session(self, hour, expected):
@@ -75,7 +75,7 @@ class TestGetCurrentSession:
 
     def test_all_24_hours_are_covered_with_no_gap(self):
         seen = {SessionEngine.get_current_session(at(WED, h)).current_session for h in range(24)}
-        assert seen == {"ASIAN", "LONDON", "LONDON_NY_OVERLAP", "NEW_YORK", "OFF_HOURS"}
+        assert seen == {"ASIAN", "LONDON", "LONDON_NY_OVERLAP", "NEW_YORK", "SYDNEY_PACIFIC"}
 
     def test_returns_a_session_context(self):
         assert isinstance(SessionEngine.get_current_session(at(WED, 10)), SessionContext)

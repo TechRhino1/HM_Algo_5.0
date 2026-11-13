@@ -69,9 +69,12 @@ class MT5Client:
         if auto_init:
             self.init_connection()
 
+    @property
+    def is_paper_or_offline(self) -> bool:
+        return self.mode in ("paper", "offline", "backtest") or os.environ.get("JARVIS_BACKTEST_MODE") == "1"
 
     def init_connection(self) -> bool:
-        if self.mode in ("paper", "backtest", "offline") or os.environ.get("JARVIS_BACKTEST_MODE") == "1":
+        if self.is_paper_or_offline:
             self.is_connected = True
             logger.info("MT5Client running in simulated/offline execution mode.")
             return True
@@ -148,7 +151,7 @@ class MT5Client:
         if symbol in self.symbol_alias_cache:
             return self.symbol_alias_cache[symbol]
 
-        if self.mode == "paper" or not MT5_AVAILABLE or not self.is_connected:
+        if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
             return symbol
 
         def _resolve():
@@ -230,7 +233,7 @@ class MT5Client:
             "volume_max": 100.0,
             "volume_step": 0.01,
         }
-        if not MT5_AVAILABLE or mt5 is None or not self.is_connected or self.mode == "paper":
+        if not MT5_AVAILABLE or mt5 is None or not self.is_connected or self.is_paper_or_offline:
             from jarvis.data.symbol_registry import resolve as resolve_sym
             s = resolve_sym(symbol)
             spec_dict.update({
@@ -277,7 +280,7 @@ class MT5Client:
         or None if market depth is unavailable or broker does not support Level 2 book.
         """
         self._reconnect_if_needed()
-        if self.mode == "paper" or not self.is_connected or not MT5_AVAILABLE or mt5 is None:
+        if self.is_paper_or_offline or not self.is_connected or not MT5_AVAILABLE or mt5 is None:
             return None
 
         resolved = self.resolve_symbol_name(symbol)
@@ -308,7 +311,7 @@ class MT5Client:
 
     def release_market_depth(self, symbol: str) -> bool:
         """Unsubscribes from Level 2 Depth of Market book for symbol."""
-        if self.mode == "paper" or not self.is_connected or not MT5_AVAILABLE or mt5 is None:
+        if self.is_paper_or_offline or not self.is_connected or not MT5_AVAILABLE or mt5 is None:
             return True
         resolved = self.resolve_symbol_name(symbol)
         try:
@@ -334,7 +337,7 @@ class MT5Client:
         # against a simulated book of 10,000. `MT5StateSynchronizer` then caches
         # it into state_manager.account, so every later risk and sizing decision
         # inherits it too.
-        if self.mode == "paper":
+        if self.is_paper_or_offline:
             with self._lock:
                 paper_pnl = sum(getattr(p, "profit", 0.0) for p in self._paper_positions.values())
             return AccountSnapshot(
@@ -400,7 +403,7 @@ class MT5Client:
 
         self._reconnect_if_needed()
 
-        if self.mode == "paper":
+        if self.is_paper_or_offline:
             with self._lock:
                 if symbol:
                     resolved = self.resolve_symbol_name(symbol)
@@ -617,7 +620,7 @@ class MT5Client:
                     logger.critical(f"SAFETY BLOCK: Refusing order in LIVE mode because connected MT5 account #{acc.login} is DEMO!")
                     return {"status": "BLOCKED", "reason": f"SAFETY_BLOCK: Connected to DEMO MT5 account #{acc.login} while bot in LIVE mode"}
 
-        if self.mode == "paper" or not MT5_AVAILABLE:
+        if self.is_paper_or_offline or not MT5_AVAILABLE:
             # A simulated fill is what paper mode ASKED for, so the row is
             # honest as `paper`.
             is_fallback = requested_mode != "paper"
@@ -917,7 +920,7 @@ class MT5Client:
                     logger.critical(f"SAFETY BLOCK: Refusing pending order in LIVE mode because connected MT5 account #{acc.login} is DEMO!")
                     return {"status": "BLOCKED", "reason": f"SAFETY_BLOCK: Connected to DEMO MT5 account #{acc.login} while bot in LIVE mode"}
 
-        if self.mode == "paper" or not MT5_AVAILABLE:
+        if self.is_paper_or_offline or not MT5_AVAILABLE:
             ticket = int(time.time() * 1000) % 100000000
             order_info = {
                 "status": "PLACED",
@@ -1007,7 +1010,7 @@ class MT5Client:
 
     def get_pending_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """Returns active pending orders from MT5 with 1.0s fast caching."""
-        if self.mode == "paper" or not MT5_AVAILABLE or not self.is_connected:
+        if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
             with self._lock:
                 resolved = self.resolve_symbol_name(symbol) if symbol else None
                 if resolved:
@@ -1063,7 +1066,7 @@ class MT5Client:
     def cancel_pending_order(self, ticket: int) -> Dict[str, Any]:
         """Cancels a pending order by ticket."""
         self._pending_orders_cache = (0.0, [])
-        if self.mode == "paper" or not MT5_AVAILABLE or not self.is_connected:
+        if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
             with self._lock:
                 self._paper_pending_orders.pop(ticket, None)
             return {"status": "CANCELLED", "ticket": ticket}
@@ -1109,7 +1112,7 @@ class MT5Client:
         if price is None and sl is None and tp is None:
             return {"status": "FAILED", "reason": "nothing to modify — supply price, sl or tp"}
 
-        if self.mode == "paper" or not MT5_AVAILABLE or not self.is_connected:
+        if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
             with self._lock:
                 order = self._paper_pending_orders.get(int(ticket))
                 if order is None:
@@ -1196,7 +1199,7 @@ class MT5Client:
 
     def close_position(self, ticket: int, volume: Optional[float] = None) -> Dict[str, Any]:
         """Closes a specific open MT5 position (full or partial) by ticket."""
-        if self.mode == "paper" or not MT5_AVAILABLE or not self.is_connected:
+        if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
             with self._lock:
                 if ticket in self._paper_positions:
                     pos = self._paper_positions[ticket]
@@ -1305,7 +1308,7 @@ class MT5Client:
 
     def modify_position(self, ticket: int, sl: float, tp: float) -> Dict[str, Any]:
         """Modifies Stop Loss and Take Profit of an open MT5 position."""
-        if self.mode == "paper" or not MT5_AVAILABLE or not self.is_connected:
+        if self.is_paper_or_offline or not MT5_AVAILABLE or not self.is_connected:
             with self._lock:
                 if ticket in self._paper_positions:
                     self._paper_positions[ticket].sl = float(sl)

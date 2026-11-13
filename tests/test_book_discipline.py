@@ -19,7 +19,9 @@ from jarvis.data.symbol_registry import resolve as resolve_spec
 
 
 def _policy(**kw):
-    return ExitPolicy(symbol="TEST", **kw)
+    defaults = {"peak_bridge_activate_r": 0.60, "peak_bridge_retrace_r": 0.45}
+    defaults.update(kw)
+    return ExitPolicy(symbol="TEST", **defaults)
 
 
 def _run_exit_buy(entry, initial_sl, price, peak_dist, tp, current_sl=None, **kw):
@@ -116,12 +118,12 @@ class TestUnsplittableBookGate(unittest.TestCase):
         self.orchestrator.stop()
 
     def test_gold_micro_book_unsplittable(self):
-        # $2k @ 0.5% = $10 risk budget; gold stop 40 pips * $10/pip-lot:
-        # ideal 0.025 lots, expected (x0.55) 0.0138 < 0.02 -> all-or-nothing.
+        # Gold stop 60 pips * $10/pip-lot with $10 budget:
+        # ideal 0.0167 < 0.02 -> all-or-nothing.
         spec = resolve_spec("XAUUSD")
         self.assertTrue(
             self.orchestrator._is_unsplittable_book(
-                entry_price=4200.0, stop_loss=4196.0,
+                entry_price=4200.0, stop_loss=4194.0,
                 equity=2000.0, spec=spec, volume_min=0.01,
             )
         )
@@ -137,13 +139,12 @@ class TestUnsplittableBookGate(unittest.TestCase):
         )
 
     def test_tiny_equity_marks_everything_unsplittable(self):
-        # <$250 micro tier (1.5%): budget $3.75 -> EURUSD ideal 0.031,
-        # expected ~0.017 < 0.02 -> all-or-nothing even on majors.
+        # <$100 micro tier (2.0%): budget $2.00 -> EURUSD ideal 0.0167 < 0.02 -> all-or-nothing even on majors.
         spec = resolve_spec("EURUSD")
         self.assertTrue(
             self.orchestrator._is_unsplittable_book(
                 entry_price=1.1000, stop_loss=1.0988,
-                equity=200.0, spec=spec, volume_min=0.01,
+                equity=100.0, spec=spec, volume_min=0.01,
             )
         )
 

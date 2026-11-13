@@ -50,7 +50,8 @@ class TestJarvisCore(unittest.TestCase):
 
         self.assertEqual(get_max_lot_cap(35.0), 0.01)
         self.assertEqual(get_max_lot_cap(80.0), 0.01)
-        self.assertEqual(get_max_lot_cap(150.0), 0.02)
+        self.assertEqual(get_max_lot_cap(150.0), 0.01)
+        self.assertEqual(get_max_lot_cap(200.0), 0.02)
 
         # Smooth EV hurdles for sub-$1000 accounts
         ev_micro = get_effective_min_ev(80.0, planned_risk_dollars=0.40)

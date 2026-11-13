@@ -1050,9 +1050,9 @@ class LiveNewsEngine:
                     break
 
             except Exception as e:
-
                 last_exc = e
-
+                if getattr(e, "code", None) in (403, 429):
+                    break
                 continue
 
 

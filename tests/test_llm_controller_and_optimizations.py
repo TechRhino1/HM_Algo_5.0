@@ -99,11 +99,11 @@ def test_crypto_strategy_selector_prior_weights():
         confidence=0.85
     )
     ctx = MarketContext(
-        symbol="BTCUSD",
+        symbol="ETHUSD",
         timestamp=datetime.now(timezone.utc),
-        ask=82000.0,
-        bid=81990.0,
-        current_price=81995.0,
+        ask=3000.0,
+        bid=2990.0,
+        current_price=2995.0,
         volatility=VolatilityContext(atr=500.0, current_spread_pips=10.0),
         structure=StructureContext(bias="NEUTRAL"),
         liquidity=LiquidityContext(buy_side_liquidity=83000.0, sell_side_liquidity=81000.0),

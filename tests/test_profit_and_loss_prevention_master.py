@@ -27,11 +27,11 @@ from jarvis.intelligence.decision_engine import DecisionEngine
 
 class TestProfitAndLossPreventionMaster(unittest.TestCase):
     def test_account_tier_micro_and_lot_cap(self):
-        """Verify $400 account is properly classified as micro and capped at 0.03 lots."""
+        """Verify $400 account is properly classified as micro and capped at 0.05 lots."""
         equity = 409.81
         self.assertTrue(is_micro_account(equity), "Account with $409 equity should be recognized as micro")
         lot_cap = get_max_lot_cap(equity)
-        self.assertEqual(lot_cap, 0.03, "Micro account equity should have max 0.03 lot cap")
+        self.assertEqual(lot_cap, 0.05, "Micro account equity should have max 0.05 lot cap")
 
     def test_exit_policy_does_not_flatten_positive_trades(self):
         """Verify time stop never kills a trade that is in profit or breakeven."""

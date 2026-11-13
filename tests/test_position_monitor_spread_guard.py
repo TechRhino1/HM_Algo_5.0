@@ -68,11 +68,14 @@ class _CaptureHandler(logging.Handler):
 @contextlib.contextmanager
 def _captured_warnings():
     handler = _CaptureHandler()
+    prev_level = LOG.level
+    LOG.setLevel(logging.DEBUG)
     LOG.addHandler(handler)
     try:
         yield handler.messages
     finally:
         LOG.removeHandler(handler)
+        LOG.setLevel(prev_level)
 
 
 def _make_context(symbol, spread_pips, price, atr):

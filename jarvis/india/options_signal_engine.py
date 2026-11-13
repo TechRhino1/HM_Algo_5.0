@@ -92,7 +92,8 @@ class OptionSignalEngine:
         rvol = analysis["rvol"]
         is_squeeze = analysis["is_squeeze"]
 
-        # Derive true PCR and IV from options chain rather than RNG
+        # Derive true PCR and IV from options chain with stable local fallback RNG
+        rng = random.Random(stable_seed(symbol))
         try:
             chain_sample = INDIA_OPTIONS.generate_option_chain(symbol)
             pcr_dict = chain_sample.get("pcr", {})

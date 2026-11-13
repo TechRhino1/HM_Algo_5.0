@@ -55,7 +55,11 @@ class _HttpError(Exception):
 
 def _source_of(req) -> str:
     url = getattr(req, "full_url", None) or str(req)
-    return "faireconomy" if "faireconomy" in url else "myfxbook"
+    if "faireconomy" in url:
+        return "faireconomy"
+    if "biquote" in url or "mql5" in url:
+        return "biquote"
+    return "myfxbook"
 
 
 class _Recorder:
@@ -71,7 +75,7 @@ class _Recorder:
 
     def __init__(self, fe_code: int = 429, mfb_code: int = 403, hold: float = 0.0):
         self._lock = threading.Lock()
-        self.calls = {"faireconomy": 0, "myfxbook": 0}
+        self.calls = {"faireconomy": 0, "myfxbook": 0, "biquote": 0}
         self.fe_code = fe_code
         self.mfb_code = mfb_code
         self.hold = hold
@@ -188,7 +192,7 @@ class TestSingleFlight:
         errors = _burst(lambda: eng.get_news_calendar())
         assert not errors, f"the engine must not raise into callers: {errors}"
 
-        assert recorder.calls == {"faireconomy": 1, "myfxbook": 1}, (
+        assert recorder.calls == {"faireconomy": 1, "myfxbook": 1, "biquote": 1}, (
             f"the burst was not collapsed: {recorder.calls}"
         )
 

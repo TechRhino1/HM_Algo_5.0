@@ -23,10 +23,10 @@ class RiskAnalyst(BaseAnalyst):
 
         # Determine structural R:R distance
         c_price = context.current_price
-        if bias == "BULLISH":
+        if st.bias == "BULLISH":
             sl_dist = abs(c_price - st.demand_zone[0]) if st.demand_zone[0] > 0 else (vol.atr * 1.5)
             tp_dist = abs(st.supply_zone[1] - c_price) if st.supply_zone[1] > c_price else (vol.atr * 3.0)
-        elif bias == "BEARISH":
+        elif st.bias == "BEARISH":
             sl_dist = abs(st.supply_zone[1] - c_price) if st.supply_zone[1] > 0 else (vol.atr * 1.5)
             tp_dist = abs(c_price - st.demand_zone[0]) if st.demand_zone[0] < c_price and st.demand_zone[0] > 0 else (vol.atr * 3.0)
         else:

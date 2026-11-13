@@ -628,9 +628,9 @@ class TestOrchestratorMultiStyleRadar(unittest.TestCase):
         """Verify _orchestration_loop_single_pass populates radar with arbiter metrics across all styles."""
         radar_results = self.orchestrator._orchestration_loop_single_pass()
 
-        # 2 symbols * 3 styles = 6 candidates
-        self.assertEqual(len(radar_results), 6)
-        self.assertEqual(len(self.orchestrator.state_manager.radar_opportunities), 6)
+        # 2 symbols * 5 styles = 10 candidates
+        self.assertEqual(len(radar_results), 10)
+        self.assertEqual(len(self.orchestrator.state_manager.radar_opportunities), 10)
 
         # Verify arbiter fields exist in radar items
         for item in radar_results:

@@ -71,9 +71,9 @@ class MarketRegimeClassifier:
         if structure.bos:
             scores[MarketRegime.BREAKOUT.value] += 1.4
             scores[MarketRegime.POST_BREAKOUT.value] += 1.0
-            if structure.bos_type == "BULLISH":
+            if structure.bos_type == "BULLISH" or (not structure.bos_type and structure.bias == "BULLISH"):
                 scores[MarketRegime.TREND_BULL.value] += 1.8
-            elif structure.bos_type == "BEARISH":
+            elif structure.bos_type == "BEARISH" or (not structure.bos_type and structure.bias == "BEARISH"):
                 scores[MarketRegime.TREND_BEAR.value] += 1.8
         elif structure.choch:
             scores[MarketRegime.REVERSAL.value] += 1.8
@@ -91,11 +91,15 @@ class MarketRegimeClassifier:
         t_score = momentum.trend_score
         adx = momentum.adx
         if adx >= 22:
-            adx_multiplier = min(1.4, 1.0 + max(0.0, (adx - 22) / 15.0))
+            adx_multiplier = 1.0 + max(0.0, (adx - 22) / 12.0)
             if t_score >= 35:
-                scores[MarketRegime.TREND_BULL.value] += 1.2 * adx_multiplier
+                scores[MarketRegime.TREND_BULL.value] += 1.5 * adx_multiplier
+                if t_score >= 70:
+                    scores[MarketRegime.TREND_BULL.value] += 1.0 * adx_multiplier
             elif t_score <= -35:
-                scores[MarketRegime.TREND_BEAR.value] += 1.2 * adx_multiplier
+                scores[MarketRegime.TREND_BEAR.value] += 1.5 * adx_multiplier
+                if t_score <= -70:
+                    scores[MarketRegime.TREND_BEAR.value] += 1.0 * adx_multiplier
             else:
                 scores[MarketRegime.WEAK_TREND.value] += 0.6
         elif adx < 18:

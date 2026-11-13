@@ -487,11 +487,13 @@ class InstitutionalEntryEngine:
             max_risk_cap = 2.40 * d1_atr
         else:
             max_risk_cap = 2.80 * d1_atr
-        # Phase 2: Remove SL floor capping from position sizing
-        # Use true structural SL for risk_dist; apply floors only for broker minimum
         max_risk_cap = max(max_risk_cap, pip_size * 5)
-        # Note: We no longer cap risk_dist here; structural SL is used for sizing
-        # Broker minimum stop is enforced in execution engine
+        if risk_dist > max_risk_cap:
+            risk_dist = max_risk_cap
+            if bias == "BUY":
+                sl_price = round(entry_price - risk_dist, digits)
+            else:
+                sl_price = round(entry_price + risk_dist, digits)
 
         # 6. Targets (Phase 2): TP1 at 2.5R (50% scale-out), TP2 at 5.0R, TP3 at 8.0R macro runner
         tp1_r = 2.50

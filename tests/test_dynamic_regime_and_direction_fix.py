@@ -20,10 +20,10 @@ def test_strategy_selector_dynamic_regime_mutual_exclusion():
 
     ctx = MarketContext(
         timestamp=datetime.now(timezone.utc),
-        symbol="BTCUSD",
-        current_price=85000.0,
-        bid=84995.0,
-        ask=85005.0,
+        symbol="ETHUSD",
+        current_price=3000.0,
+        bid=2995.0,
+        ask=3005.0,
         session=SessionContext(),
         structure=StructureContext(bias="BULLISH", bos=True),
         momentum=MomentumContext(adx=32.0, trend_score=28.0),
@@ -46,10 +46,10 @@ def test_strategy_selector_dynamic_regime_mutual_exclusion():
     # 3. Range Regime -> Trend Following must be 0.0
     ctx_range = MarketContext(
         timestamp=datetime.now(timezone.utc),
-        symbol="BTCUSD",
-        current_price=85000.0,
-        bid=84995.0,
-        ask=85005.0,
+        symbol="ETHUSD",
+        current_price=3000.0,
+        bid=2995.0,
+        ask=3005.0,
         session=SessionContext(),
         structure=StructureContext(bias="NEUTRAL"),
         momentum=MomentumContext(adx=15.0, trend_score=2.0),

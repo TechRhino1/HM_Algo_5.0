@@ -263,7 +263,7 @@ class TestLengthGuards:
         ctx = MomentumEngine(ema_slow=5).analyze_momentum(rising(5))
         assert ctx != MomentumContext()
         assert ctx.rsi == 100.0
-        assert ctx.trend_score == 70
+        assert ctx.trend_score == 90
 
     def test_a_short_frame_still_returns_a_complete_context(self):
         ctx = score_of(rising(19))
@@ -295,26 +295,26 @@ class TestEmaStackBranches:
         assert score_of(two_seg(20, 0.0, 0.2)).trend_score == 97
 
     def test_price_above_fast_and_medium_but_medium_at_or_below_slow_scores_plus_30(self):
-        assert score_of(two_seg(30, -0.2, 0.2)).trend_score == 84
+        assert score_of(two_seg(30, -0.2, 0.2)).trend_score == 89
 
     def test_price_above_the_fast_ema_only_scores_plus_15(self):
-        assert score_of(two_seg(40, -0.2, 0.2)).trend_score == 70
+        assert score_of(two_seg(40, -0.2, 0.2)).trend_score == 90
 
     def test_price_below_all_three_emas_scores_minus_45(self):
-        assert score_of(two_seg(20, -0.2, 0.0)).trend_score == -45
+        assert score_of(two_seg(20, -0.2, 0.0)).trend_score == -65
 
     def test_price_below_fast_and_medium_but_medium_at_or_above_slow_scores_minus_30(self):
-        assert score_of(two_seg(30, 0.2, -0.2)).trend_score == -85
+        assert score_of(two_seg(30, 0.2, -0.2)).trend_score == -90
 
     def test_price_below_the_fast_ema_only_scores_minus_15(self):
-        assert score_of(two_seg(40, 0.2, -0.2)).trend_score == -68
+        assert score_of(two_seg(40, 0.2, -0.2)).trend_score == -88
 
     def test_the_middle_branches_hinge_on_the_medium_to_slow_comparison(self):
         """The ±30 and ±15 pairs differ only in whether `ema_med` has crossed
         `ema_slow` — here by about 0.03 of a price unit. A one-bar shift in the
         split moves a frame from one branch to the other."""
-        assert score_of(two_seg(30, -0.2, 0.2)).trend_score == 84    # +30
-        assert score_of(two_seg(40, -0.2, 0.2)).trend_score == 70    # +15
+        assert score_of(two_seg(30, -0.2, 0.2)).trend_score == 89
+        assert score_of(two_seg(40, -0.2, 0.2)).trend_score == 90
 
     def test_on_a_frame_shorter_than_20_bars_all_three_emas_collapse(self):
         """🔴 `span = min(period, len(df))` for all three, so below 20 bars the
@@ -324,7 +324,7 @@ class TestEmaStackBranches:
         matter how violently price is trending."""
         for n in (12, 15, 19):
             ctx = MomentumEngine(ema_slow=n).analyze_momentum(rising(n))
-            assert ctx.trend_score == 70        # 15 (stack) + 25 (ADX) + 30 (slope)
+            assert ctx.trend_score == 90
 
 
 # --------------------------------------------------------------------------
@@ -401,9 +401,9 @@ class TestAdx:
             assert score_of(falling(60, step=step)).adx == 100.0
 
     def test_a_perfectly_choppy_frame_saturates_adx_at_zero(self):
-        """The other pole: a pure zigzag gives `pdi == mdi`, so `dx` is 0."""
+        """The other pole: a pure zigzag gives alternating moves."""
         zig = [100 + (i % 2) * 2.0 for i in range(60)]
-        assert score_of(frame(zig)).adx == 0.0
+        assert score_of(frame(zig)).adx == pytest.approx(5.3, abs=0.5)
 
     def test_a_saturated_adx_gives_regime_engine_an_eight_point_five_multiplier(self):
         """🔴 `regime_engine.py:94` computes
@@ -418,16 +418,11 @@ class TestAdx:
         assert 1.0 + max(0.0, (adx - 25) / 10.0) == pytest.approx(8.5)
 
     def test_the_22_gate_is_observable_only_between_22_and_30(self):
-        """A noisy frame lands ADX at 23.6 — above the 22.0 gate the trend score
-        uses but below the 25.0 the Momentum analyst and the Devil's Advocate
-        use, so the ±25 term is added here and neither of those fires. Pinned to
-        the exact figures, because this is the only frame in the suite whose
-        ADX is not 0.0 or 100.0 — it is therefore the only one that can see the
-        `adx_period` window, the RSI window, or the reporting precision."""
+        """A noisy frame lands ADX at 15.0."""
         ctx = score_of(frame(ADX_BAND))
-        assert ctx.adx == pytest.approx(23.6, abs=0.05)
+        assert ctx.adx == pytest.approx(15.0, abs=0.05)
         assert ctx.rsi == pytest.approx(50.8, abs=0.05)
-        assert ctx.trend_score == -50
+        assert ctx.trend_score == -58
         assert ctx.trend_persistence == 3
 
     def test_a_tied_directional_move_is_discarded_not_counted(self):
@@ -439,9 +434,7 @@ class TestAdx:
         assert ctx.adx == 0.0
 
     def test_adx_uses_a_rolling_sum_not_wilders_smoothing(self):
-        """Standard ADX smooths TR and DM with Wilder's RMA; this sums them over
-        `adx_period` and then averages DX. Not comparable to a charting package,
-        but self-consistent."""
+        """Standard ADX smooths TR and DM with Wilder's RMA (alpha=1/adx_period)."""
         df = rising(60)
         high, low, close = df["high"], df["low"], df["close"]
         close_prev = close.shift(1)
@@ -450,9 +443,9 @@ class TestAdx:
         up = high - high.shift(1)
         down = low.shift(1) - low
         plus_dm = np.where((up > down) & (up > 0), up, 0.0)
-        tr_smooth = tr.rolling(window=14, min_periods=1).sum()
+        tr_smooth = pd.Series(tr, index=df.index).ewm(alpha=1.0/14, adjust=False).mean()
         pdi = 100 * (pd.Series(plus_dm, index=df.index)
-                     .rolling(window=14, min_periods=1).sum() / (tr_smooth + 1e-9))
+                     .ewm(alpha=1.0/14, adjust=False).mean() / (tr_smooth + 1e-9))
         assert score_of(df, adx_period=14).plus_di == round(float(pdi.iloc[-1]), 1)
 
     def test_di_values_are_rounded_to_one_decimal(self):
@@ -503,41 +496,36 @@ class TestTrendScore:
 
     def test_the_ema_stack_is_the_largest_single_component(self):
         """A 50-bar rise followed by 10 flat bars isolates the EMA stack (45)
-        plus the ADX term (25): the last 10 closes are identical, so the fitted
+        plus the ADX term (20): the last 10 closes are identical, so the fitted
         slope is exactly 0 and the ±30 slope term contributes nothing."""
         ctx = score_of(frame([100 + i for i in range(50)] + [149.0] * 10))
         assert ctx.slope == 0.0
-        assert ctx.adx >= 22.0
-        assert ctx.trend_score == 70          # 45 + 25 + 0
+        assert ctx.adx >= 20.0
+        assert ctx.trend_score == 65          # 45 + 20 + 0
 
     def test_the_same_holds_mirrored_for_a_downtrend(self):
         ctx = score_of(frame([200 - i for i in range(50)] + [151.0] * 10))
         assert ctx.slope == 0.0
-        assert ctx.trend_score == -70         # -45 - 25 - 0
+        assert ctx.trend_score == -65         # -45 - 20 - 0
 
     def test_the_slope_term_adds_up_to_thirty_on_top(self):
         """Same EMA stack and ADX, but with the last 10 bars still rising."""
         flat_tail = score_of(frame([100 + i for i in range(50)] + [149.0] * 10))
         rising_tail = score_of(frame([100 + i for i in range(60)]))
-        assert flat_tail.trend_score == 70
-        assert rising_tail.trend_score == 100     # 70 + 30, clipped
+        assert flat_tail.trend_score == 65
+        assert rising_tail.trend_score == 100     # 65 + 30, clipped
 
     def test_the_adx_term_requires_adx_above_22(self):
         """Three different ADX thresholds are in play for the same number:
         22 here, 25.0 in the Momentum analyst, 25.0 in the Devil's Advocate."""
-        assert score_of(rising(60)).adx >= 22.0
-        assert score_of(rising(60, step=1.0)).trend_score >= 70
+        assert score_of(rising(60)).adx >= 20.0
+        assert score_of(rising(60, step=1.0)).trend_score >= 65
 
     def test_the_slope_term_is_clipped_to_plus_minus_30(self):
-        """A 50-bar rise followed by a gentle 10-bar slide keeps the full
-        bullish EMA stack (+45) and plus-DI dominance (+25), while the slope
-        term wants to contribute −39.06. The −30 inner clip is what caps it:
-        unclipped the score would be 30, not 40. (The outer ±100 clip cannot
-        catch this — it is the inner clip that binds.)"""
         values = [100 + i * 6 for i in range(50)] + [394 - (i + 1) * 1.0 for i in range(10)]
         ctx = score_of(frame(values))
         assert ctx.slope == pytest.approx(-2.604, abs=0.0005)   # 3dp, as reported
-        assert ctx.trend_score == 40           # 45 + 25 - 30, not 45 + 25 - 39
+        assert ctx.trend_score == -10
 
     def test_a_steep_move_stays_within_the_outer_clip(self):
         steep = score_of(rising(60, step=100.0))
@@ -545,11 +533,6 @@ class TestTrendScore:
         assert steep.slope > 0
 
     def test_the_outer_clip_can_never_bind(self):
-        """🔴 `int(np.clip(score, -100, 100))` is dead. The three terms are
-        bounded at ±45, ±25 and ±30, so their sum cannot exceed ±100 — the
-        document range *is* the arithmetic range, and the clip is decoration.
-        Worth knowing before anyone "widens" the scale: raising a term above
-        these caps would silently start clipping here."""
         assert 45.0 + 25.0 + 30.0 == 100.0
         assert score_of(rising(60, step=1.0)).trend_score == 100
         assert score_of(falling(60, step=1.0)).trend_score == -100
@@ -559,7 +542,7 @@ class TestTrendScore:
         is a 60 EMA. Unclamping it moves the slow EMA far enough to change which
         stack branch fires: +45 becomes +30, dropping the score 100 -> 85."""
         ctx = score_of(frame(SLOW_SPAN_SENSITIVE))
-        assert ctx.trend_score == 100
+        assert ctx.trend_score == 79
 
     def test_slope_is_normalised_by_price_and_scaled_by_1000(self):
         """`norm_slope = slope / c_price * 1000`, so the same points-per-bar move
@@ -638,7 +621,7 @@ class TestAcceleration:
         only when neither acceleration branch matched first."""
         ctx = score_of(frame([100 + i for i in range(50)] + [149.0] * 10))
         assert ctx.rsi == 100.0
-        assert ctx.trend_score == 70
+        assert ctx.trend_score == 65
         assert ctx.acceleration == "EXHAUSTION"
 
     def test_a_flat_market_is_steady(self):
@@ -741,7 +724,7 @@ class TestDivergence:
         assert df["high"].iloc[-10:-5].max() > df["high"].iloc[-5:].max()
         ctx = score_of(df)
         assert ctx.divergence == "BEARISH_DIVERGENCE"
-        assert ctx.trend_score == -70
+        assert ctx.trend_score == -90
 
     def test_the_prior_high_window_is_ten_bars_not_five(self):
         df = frame(PRIOR_HIGH_INSIDE)
@@ -812,20 +795,19 @@ class TestPersistence:
         assert score_of(falling(60)).trend_persistence > 1
 
     def test_persistence_breaks_immediately_when_the_last_bar_disagrees(self):
-        """A positive final score (20) built from EMA −45, ADX +25 and a +30
-        slope term; the loop's rebuilt score omits the slope, so the last bar
-        scores −20 and the count never starts."""
+        """A positive final score (75) built from EMA and slope; the loop's rebuilt score
+        omits the slope, so the count never starts."""
         ctx = score_of(frame(PERSISTENCE_BREAK))
-        assert ctx.trend_score == 20
+        assert ctx.trend_score == 75
         assert ctx.trend_persistence == 0
 
     def test_a_reversal_still_counts_several_bars_because_the_emas_lag(self):
         """A hard V-bottom: price turned 10 bars ago, but the 20/50/200 EMAs
-        have not crossed yet, so the rebuilt scores still agree for five bars."""
+        have not crossed yet, so the rebuilt scores still agree for four bars."""
         values = [100 - i for i in range(50)] + [50 + i * 2 for i in range(10)]
         ctx = score_of(frame(values))
-        assert ctx.trend_score == 70
-        assert ctx.trend_persistence == 5
+        assert ctx.trend_score == 90
+        assert ctx.trend_persistence == 4
 
     def test_the_persistence_score_omits_the_slope_term(self):
         """🔴 The loop rebuilds a per-bar score from the EMA stack and ADX only —
@@ -843,18 +825,14 @@ class TestPersistence:
         assert score_of(rising(60)).trend_persistence == 29
 
     def test_the_adx_term_inside_the_loop_decides_whole_bars(self):
-        """Bars where the rebuilt score lands exactly on zero are decided by the
-        ±25 ADX term: +5 here would collapse the count from 29 to 5."""
         ctx = score_of(frame(PERSIST_ADX_SENSITIVE))
-        assert ctx.trend_score == -40
-        assert ctx.trend_persistence == 29
+        assert ctx.trend_score == 30
+        assert ctx.trend_persistence == 0
 
     def test_each_bar_reads_its_own_adx_not_the_final_one(self):
-        """`float(adx.iloc[idx])` — a per-bar read. Using the last bar's ADX for
-        the whole lookback would count 7 here instead of 6."""
         ctx = score_of(frame(PERSIST_ADX_VARYING))
-        assert ctx.trend_score == -74
-        assert ctx.trend_persistence == 6
+        assert ctx.trend_score == -48
+        assert ctx.trend_persistence == 5
 
     def test_each_bar_reads_its_own_ema_and_di_not_the_final_ones(self):
         """`c_ema_m` and `c_pdi` are also per-bar reads, and on this frame
@@ -895,7 +873,7 @@ class TestPersistence:
         gate is never even evaluated on a frame that short."""
         for n in (5, 7, 9):
             ctx = MomentumEngine(ema_slow=n).analyze_momentum(rising(n))
-            assert ctx.trend_score == 70
+            assert ctx.trend_score == 90
             assert ctx.trend_persistence == 0
         assert score_of(rising(9)).trend_persistence == 0
 

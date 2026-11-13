@@ -202,6 +202,7 @@ def test_naked_manual_trade_auto_protection():
         context_engine=mock_ctx_eng,
         state_manager=state_mgr,
         event_bus=MagicMock(),
+        manual_mode="AUTO_PILOT",
     )
     pm._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
 
@@ -240,6 +241,7 @@ def test_manual_trade_milestone_progression_in_autopilot():
         context_engine=mock_ctx_eng,
         state_manager=state_mgr,
         event_bus=MagicMock(),
+        manual_mode="AUTO_PILOT",
     )
     pm._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
 
@@ -380,6 +382,7 @@ def test_manual_mode_remains_autopilot_across_ticks():
         data_feed=MagicMock(),
         context_engine=mock_ctx_eng,
         state_manager=state_mgr,
+        manual_mode="AUTO_PILOT",
     )
     pm._ctx_cache["EURUSD"] = (ctx, time.monotonic())
     # Default manual mode must be AUTO_PILOT
@@ -438,6 +441,7 @@ def test_institutional_trailing_parity_automated_vs_manual():
         data_feed=MagicMock(),
         context_engine=mock_ctx_eng,
         state_manager=state_mgr,
+        manual_mode="AUTO_PILOT",
     )
     pm._ctx_cache["XAUUSD"] = (ctx, time.monotonic())
 

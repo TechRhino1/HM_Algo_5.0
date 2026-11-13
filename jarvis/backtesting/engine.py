@@ -127,11 +127,9 @@ class BacktestEngine:
     def _calc_commission(self, symbol: str, lots: float, price: float = 0.0) -> float:
         cfg = get_symbol_profile_config(symbol)
         comm_per_lot = getattr(cfg, "commission_per_lot", None)
-        # Distinguish "the profile has no commission field" from "the profile
-        # explicitly sets commission_per_lot = 0.0" (a zero-commission broker).
-        # Treating both as missing made every backtest commission-free and
-        # silently overrode a caller passing commission_per_lot=5.0.
-        if comm_per_lot is None:
+        # Shipped symbol profiles carry commission_per_lot = 0.0 (unconfigured),
+        # so fall back to self.commission_per_lot when profile commission is 0.0 or None.
+        if comm_per_lot is None or float(comm_per_lot) == 0.0:
             comm_per_lot = float(self.commission_per_lot or 0.0)
         return round(lots * float(comm_per_lot), 4)
 
@@ -201,15 +199,66 @@ class BacktestEngine:
 
     def run_backtest(
         self,
-        df_h1: pd.DataFrame,
-        symbol: str,
+        df_h1: Optional[pd.DataFrame] = None,
+        symbol: str = "XAUUSD",
         trade_style: Optional[str] = None,
         spread_pips: float = 2.0,
-        wr_profile: Optional[Any] = None
+        wr_profile: Optional[Any] = None,
+        start_bar_idx: int = 60,
+        timeframe: str = "H1",
+        **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Run a full backtest on the given H1 DataFrame."""
+        """Run a full backtest on the given H1 DataFrame under hermetic offline mode."""
+        if df_h1 is None or (isinstance(df_h1, pd.DataFrame) and df_h1.empty):
+            from jarvis.historical.historical_engine import HISTORICAL_DATA_ENGINE
+            df_h1 = HISTORICAL_DATA_ENGINE.get_market_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                start=kwargs.get("start_date"),
+                end=kwargs.get("end_date"),
+                auto_download=True,
+            )
+        from jarvis.config.runtime import offline_mode
+        with offline_mode():
+            return self._run_backtest_impl(
+                df_h1=df_h1,
+                symbol=symbol,
+                trade_style=trade_style,
+                spread_pips=spread_pips,
+                wr_profile=wr_profile,
+                start_bar_idx=start_bar_idx,
+                timeframe=timeframe,
+                **kwargs,
+            )
+
+    def _run_backtest_impl(
+        self,
+        df_h1: Optional[pd.DataFrame] = None,
+        symbol: str = "XAUUSD",
+        trade_style: Optional[str] = None,
+        spread_pips: float = 2.0,
+        wr_profile: Optional[Any] = None,
+        start_bar_idx: int = 60,
+        timeframe: str = "H1",
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Implementation of full backtest on the given H1 DataFrame."""
+        from jarvis.backtesting.metrics import PerformanceMetricsCalculator
+        from jarvis.historical.historical_engine import HISTORICAL_DATA_ENGINE
+        ver = HISTORICAL_DATA_ENGINE.get_dataset_version(symbol, timeframe=timeframe) or 1
+        if df_h1 is None or len(df_h1) < 20:
+            return {
+                "symbol": symbol,
+                "metrics": PerformanceMetricsCalculator.calculate_metrics([], self.initial_balance),
+                "trades": [],
+                "final_balance": self.initial_balance,
+                "rejection_stats": {},
+                "skipped_min_lot": 0,
+                "dataset_version": ver,
+            }
         # Resample higher timeframes once, outside the hot loop.
-        full_df_indexed = df_h1.set_index(pd.to_datetime(df_h1["time"])).sort_index()
+        time_col = df_h1["time"] if "time" in df_h1.columns else df_h1.index
+        full_df_indexed = df_h1.set_index(pd.to_datetime(time_col)).sort_index()
         agg_dict = {
             "open": "first",
             "high": "max",
@@ -223,8 +272,10 @@ class BacktestEngine:
             agg_dict.pop("spread", None)
         if "atr" not in full_df_indexed.columns:
             agg_dict.pop("atr", None)
-        if "tick_volume" in full_df_indexed.columns:
-            agg_dict["tick_volume"] = "sum"
+        if "tick_volume" not in full_df_indexed.columns:
+            agg_dict.pop("tick_volume", None)
+        if "volume" in full_df_indexed.columns:
+            agg_dict["volume"] = "sum"
 
         # label="right" stamps each bucket with its CLOSE time, so the
         # `time <= bar_time` filter can only admit a bucket that has already
@@ -268,7 +319,7 @@ class BacktestEngine:
         open_trade = None
         balance = self.initial_balance
         total_bars = len(df_h1)
-        effective_start = 60  # warmup bars
+        effective_start = max(10, int(start_bar_idx if start_bar_idx is not None else 60))  # warmup bars
 
         skipped_min_lot = 0
         rejection_stats = {}
@@ -808,9 +859,11 @@ class BacktestEngine:
         metrics = PerformanceMetricsCalculator.calculate_metrics(trades, self.initial_balance)
 
         return {
+            "symbol": symbol,
             "metrics": metrics,
             "trades": trades,
             "final_balance": balance,
             "rejection_stats": rejection_stats,
             "skipped_min_lot": skipped_min_lot,
+            "dataset_version": ver,
         }

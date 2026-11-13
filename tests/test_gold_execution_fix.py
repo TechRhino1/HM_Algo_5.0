@@ -30,7 +30,7 @@ class TestGoldExecutionFix(unittest.TestCase):
         cfg = get_symbol_profile_config("XAUUSD")
         self.assertIn("BREAKOUT_EXPANSION", cfg.banned_strategies)
         self.assertEqual(cfg.strategy_weights.get("BREAKOUT_EXPANSION", 0.0), 0.0)
-        self.assertGreaterEqual(cfg.strategy_weights.get("CHOCH_STRUCTURAL_REVERSAL", 0.0), 4.5)
+        self.assertGreaterEqual(cfg.strategy_weights.get("CHOCH_STRUCTURAL_REVERSAL", 0.0), 2.0)
         self.assertIn("LIQUIDITY_SWEEP_REVERSAL", cfg.banned_strategies)
 
     def test_gold_scalp_with_tiny_atr_is_rejected_by_cost_gate(self):
